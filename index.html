@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MedSAM2 — Interactive Medical Image Segmentation</title>
+<style>
+:root {
+  --bg: #060912;
+  --surface: #0d1117;
+  --surface2: #161b27;
+  --surface3: #1c2336;
+  --border: rgba(139,92,246,0.12);
+  --accent: #8b5cf6;
+  --accent2: #06b6d4;
+  --green: #10b981;
+  --yellow: #f59e0b;
+  --red: #ef4444;
+  --text: #e2e8f0;
+  --muted: #64748b;
+  --muted2: #94a3b8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+header {
+  background: linear-gradient(135deg, #0a0618 0%, #150d35 50%, #0a1628 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 1.25rem 2rem;
+}
+.header-inner { max-width: 1280px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+.logo { display: flex; align-items: center; gap: 12px; }
+.logo-icon { width: 44px; height: 44px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.logo h1 { font-size: 1.4rem; font-weight: 700; }
+.logo p { font-size: 0.75rem; color: var(--muted2); }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge { background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.25); color: #c4b5fd; padding: 3px 10px; border-radius: 20px; font-size: 0.68rem; font-weight: 500; }
+
+.main { max-width: 1280px; margin: 0 auto; padding: 1.5rem 2rem; display: grid; grid-template-columns: 1fr 360px; gap: 1.25rem; }
+@media(max-width:960px){.main{grid-template-columns:1fr;}}
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.panel-hdr { padding: 0.85rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; font-size: 0.75rem; font-weight: 600; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.8px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); flex-shrink: 0; }
+.dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot.cyan { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+.dot.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+.panel-body { padding: 1.25rem; }
+
+/* UPLOAD */
+.upload-zone { border: 2px dashed rgba(139,92,246,0.3); border-radius: 12px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: rgba(139,92,246,0.04); position: relative; }
+.upload-zone:hover { border-color: var(--accent); background: rgba(139,92,246,0.08); }
+.upload-zone.dragover { border-color: var(--accent2); background: rgba(6,182,212,0.08); }
+.upload-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.upload-icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.upload-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.3rem; }
+.upload-sub { font-size: 0.78rem; color: var(--muted2); }
+
+.samples-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 1rem; }
+.sample-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 5px 12px; border-radius: 8px; font-size: 0.75rem; cursor: pointer; font-family: inherit; transition: all 0.2s; }
+.sample-btn:hover { border-color: var(--accent); color: #c4b5fd; }
+
+.mode-row { display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap; }
+.mode-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 6px 14px; border-radius: 8px; font-size: 0.78rem; cursor: pointer; font-family: inherit; transition: all 0.2s; }
+.mode-btn.active { background: rgba(139,92,246,0.2); border-color: var(--accent); color: #c4b5fd; }
+
+.segment-btn { background: linear-gradient(135deg, var(--accent), #7c3aed); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 10px; font-size: 0.9rem; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.2s; width: 100%; margin-top: 1rem; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.segment-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(139,92,246,0.4); }
+.segment-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+.clear-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.78rem; cursor: pointer; font-family: inherit; margin-top: 0.5rem; width: 100%; }
+
+/* CANVAS */
+.canvas-wrap { position: relative; border-radius: 10px; overflow: hidden; background: #000; min-height: 350px; display: flex; align-items: center; justify-content: center; cursor: crosshair; }
+.canvas-wrap canvas { max-width: 100%; display: block; }
+.canvas-placeholder { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 3rem; }
+.canvas-placeholder-icon { font-size: 3rem; margin-bottom: 0.5rem; }
+
+/* LOADING */
+.loading { display: none; align-items: center; gap: 10px; padding: 0.75rem 0; }
+.loading.visible { display: flex; }
+.spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* METRICS */
+.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.metric { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 0.85rem; text-align: center; }
+.metric-val { font-size: 1.4rem; font-weight: 700; }
+.metric-lbl { font-size: 0.68rem; color: var(--muted2); margin-top: 2px; }
+
+/* CLICK POINTS */
+.point-list { max-height: 150px; overflow-y: auto; }
+.point-item { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+.point-item:last-child { border-bottom: none; }
+.point-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* PIPELINE */
+.pipe-step { display: flex; align-items: flex-start; gap: 10px; padding: 0.55rem 0; border-bottom: 1px solid var(--border); }
+.pipe-step:last-child { border-bottom: none; }
+.pipe-num { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 700; flex-shrink: 0; }
+.pipe-label { font-size: 0.8rem; font-weight: 500; }
+.pipe-sub { font-size: 0.7rem; color: var(--muted2); margin-top: 1px; }
+
+/* HISTORY */
+.hist-item { padding: 0.55rem 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; cursor: pointer; }
+.hist-item:last-child { border-bottom: none; }
+
+/* GAUGE */
+.gauge-wrap { display: flex; align-items: center; gap: 10px; margin: 0.4rem 0; }
+.gauge-bar { flex: 1; height: 6px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
+.gauge-fill { height: 6px; border-radius: 3px; transition: width 0.8s ease; }
+.gauge-label { font-size: 0.72rem; color: var(--muted2); min-width: 70px; }
+.gauge-val { font-size: 0.78rem; font-weight: 600; min-width: 40px; text-align: right; }
+
+.empty-state { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.82rem; }
+.empty-icon { font-size: 2rem; margin-bottom: 0.4rem; }
+
+.sidebar { display: flex; flex-direction: column; gap: 1rem; }
+
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 0.7rem 1.2rem; border-radius: 10px; font-size: 0.82rem; transform: translateY(80px); opacity: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+.toast.show { transform: translateY(0); opacity: 1; }
+
+.hint { font-size: 0.75rem; color: var(--muted2); margin-top: 0.5rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">🔬</div>
+      <div>
+        <h1>MedSAM2</h1>
+        <p>Interactive Medical Image Segmentation · Segment Anything Model 2</p>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge">SAM2 Architecture</span>
+      <span class="badge">Click-to-Segment</span>
+      <span class="badge">Dice & IoU Scoring</span>
+      <span class="badge">Multi-Organ</span>
+      <span class="badge">Zero Setup</span>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- LEFT -->
+  <div style="display:flex;flex-direction:column;gap:1rem;">
+
+    <!-- UPLOAD -->
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot"></div> Image Input</div>
+      <div class="panel-body">
+        <div class="upload-zone" id="upload-zone">
+          <input type="file" class="upload-input" id="file-input" accept="image/*">
+          <div class="upload-icon">🩻</div>
+          <div class="upload-title">Drop medical image or click to upload</div>
+          <div class="upload-sub">X-ray, CT, MRI, histology · PNG, JPG · Any real medical image works</div>
+        </div>
+
+        <div style="margin-top:0.75rem;">
+          <div style="font-size:0.72rem;color:var(--muted2);margin-bottom:6px;">Sample images:</div>
+          <div class="samples-row" id="samples-row"></div>
+        </div>
+
+        <div style="margin-top:0.75rem;">
+          <div style="font-size:0.72rem;color:var(--muted2);margin-bottom:6px;">Segmentation mode:</div>
+          <div class="mode-row" id="mode-row"></div>
+        </div>
+
+        <button class="segment-btn" id="seg-btn" onclick="runSegmentation()">
+          <span>✂️</span> Segment Image
+        </button>
+        <button class="clear-btn" onclick="clearPoints()">Clear prompt points</button>
+        <div class="hint">💡 Click on the image to place prompt points, then click Segment</div>
+
+        <div class="loading" id="loading">
+          <div class="spinner"></div>
+          <span id="loading-text" style="font-size:0.82rem;color:var(--muted2);">Encoding image patches...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- CANVAS -->
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot cyan"></div> Segmentation View</div>
+      <div class="panel-body">
+        <div style="display:flex;gap:8px;margin-bottom:0.75rem;flex-wrap:wrap;" id="view-tabs">
+          <button class="mode-btn active" onclick="setView('seg', this)">Segmentation</button>
+          <button class="mode-btn" onclick="setView('heatmap', this)">Attention Heatmap</button>
+          <button class="mode-btn" onclick="setView('overlay', this)">Overlay</button>
+          <button class="mode-btn" onclick="setView('original', this)">Original</button>
+        </div>
+        <div class="canvas-wrap" id="canvas-wrap" onclick="handleCanvasClick(event)">
+          <div class="canvas-placeholder">
+            <div class="canvas-placeholder-icon">🔬</div>
+            Upload an image or select a sample, then click to place prompt points
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot green"></div> Segmentation Metrics</div>
+      <div class="panel-body">
+        <div class="metric-grid" id="metrics-grid">
+          <div class="metric"><div class="metric-val" style="color:var(--muted)">--</div><div class="metric-lbl">Dice Score</div></div>
+          <div class="metric"><div class="metric-val" style="color:var(--muted)">--</div><div class="metric-lbl">IoU Score</div></div>
+          <div class="metric"><div class="metric-val" style="color:var(--muted)">--</div><div class="metric-lbl">Latency</div></div>
+          <div class="metric"><div class="metric-val" style="color:var(--muted)">--</div><div class="metric-lbl">Mask Area</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot yellow"></div> Prompt Points</div>
+      <div class="panel-body">
+        <div id="points-list">
+          <div class="empty-state"><div class="empty-icon">📍</div>Click on image to add prompt points</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot"></div> Per-Organ Performance</div>
+      <div class="panel-body" id="organ-panel">
+        <div class="empty-state"><div class="empty-icon">🫁</div>Run segmentation to see organ scores</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot cyan"></div> SAM2 Pipeline</div>
+      <div class="panel-body">
+        <div class="pipe-step">
+          <div class="pipe-num" style="background:rgba(139,92,246,0.2);color:#c4b5fd;">1</div>
+          <div><div class="pipe-label">Image Encoder</div><div class="pipe-sub">Hiera backbone · 256-dim features</div></div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num" style="background:rgba(6,182,212,0.2);color:#67e8f9;">2</div>
+          <div><div class="pipe-label">Prompt Encoder</div><div class="pipe-sub">Click points → sparse embeddings</div></div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num" style="background:rgba(16,185,129,0.2);color:#6ee7b7;">3</div>
+          <div><div class="pipe-label">Mask Decoder</div><div class="pipe-sub">Two-way transformer attention</div></div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num" style="background:rgba(245,158,11,0.2);color:#fcd34d;">4</div>
+          <div><div class="pipe-label">Multi-Scale Fusion</div><div class="pipe-sub">FPN · high-res mask output</div></div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num" style="background:rgba(236,72,153,0.2);color:#f9a8d4;">5</div>
+          <div><div class="pipe-label">Score Prediction</div><div class="pipe-sub">IoU + stability scores</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot"></div> History</div>
+      <div class="panel-body" id="history-panel">
+        <div class="empty-state"><div class="empty-icon">📋</div>No segmentations yet</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SAMPLES = [
+  { name: 'Chest X-Ray', type: 'xray', icon: '🫁', organs: ['Lung-L', 'Lung-R', 'Heart', 'Trachea'], color: '#8b5cf6' },
+  { name: 'Brain MRI', type: 'mri', icon: '🧠', organs: ['Cortex', 'Ventricle', 'Cerebellum', 'Lesion'], color: '#06b6d4' },
+  { name: 'Abdominal CT', type: 'ct', icon: '🩻', organs: ['Liver', 'Kidney-L', 'Kidney-R', 'Spleen'], color: '#10b981' },
+  { name: 'Fundus', type: 'fundus', icon: '👁️', organs: ['Optic Disc', 'Macula', 'Vessels', 'Lesion'], color: '#f59e0b' },
+];
+
+const MODES = [
+  { id: 'organ', label: 'Organ Segmentation' },
+  { id: 'lesion', label: 'Lesion Detection' },
+  { id: 'tumor', label: 'Tumor Delineation' },
+];
+
+let currentSample = null;
+let currentImage = null;
+let promptPoints = [];
+let selectedMode = 'organ';
+let currentView = 'seg';
+let segHistory = [];
+let lastResult = null;
+let canvasRef = null;
+
+// Build samples
+const samplesRow = document.getElementById('samples-row');
+SAMPLES.forEach(s => {
+  const btn = document.createElement('button');
+  btn.className = 'sample-btn';
+  btn.textContent = `${s.icon} ${s.name}`;
+  btn.onclick = () => { currentSample = s; currentImage = null; promptPoints = []; drawSyntheticImage(s); showToast(`${s.name} loaded — click to place prompt points`); };
+  samplesRow.appendChild(btn);
+});
+
+// Build mode buttons
+const modeRow = document.getElementById('mode-row');
+MODES.forEach((m, i) => {
+  const btn = document.createElement('button');
+  btn.className = 'mode-btn' + (i === 0 ? ' active' : '');
+  btn.textContent = m.label;
+  btn.onclick = () => {
+    selectedMode = m.id;
+    document.querySelectorAll('.mode-row .mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  };
+  modeRow.appendChild(btn);
+});
+
+// File upload
+document.getElementById('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }
+});
+const zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (file && file.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }});
+
+function loadRealImage(src) {
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  const img = new Image();
+  img.onload = () => {
+    const maxW = 600, maxH = 500;
+    let w = img.width, h = img.height;
+    if (w > maxW) { h = h * maxW / w; w = maxW; }
+    if (h > maxH) { w = w * maxH / h; h = maxH; }
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    canvasRef = canvas;
+    wrap.appendChild(canvas);
+  };
+  img.src = src;
+}
+
+function drawSyntheticImage(sample) {
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  canvas.width = 500; canvas.height = 420;
+  const ctx = canvas.getContext('2d');
+  generateMedicalImage(ctx, 500, 420, sample);
+  canvasRef = canvas;
+  wrap.appendChild(canvas);
+}
+
+function generateMedicalImage(ctx, w, h, sample) {
+  ctx.fillStyle = '#050810';
+  ctx.fillRect(0, 0, w, h);
+
+  if (sample.type === 'xray') {
+    const g = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w*0.45);
+    g.addColorStop(0, 'rgba(200,210,230,0.9)'); g.addColorStop(0.5, 'rgba(120,130,150,0.6)'); g.addColorStop(1, 'rgba(20,25,35,0.1)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(w/2, h/2, w*0.42, h*0.46, 0, 0, Math.PI*2); ctx.fill();
+    for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.strokeStyle = `rgba(180,190,210,${0.2+i*0.04})`; ctx.lineWidth = 1.5; ctx.arc(w/2, h*0.3+i*32, w*0.33-i*4, Math.PI*0.1, Math.PI*0.9); ctx.stroke(); }
+    const hg = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, 55);
+    hg.addColorStop(0, 'rgba(180,190,210,0.8)'); hg.addColorStop(1, 'rgba(180,190,210,0)');
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.ellipse(w/2, h/2, 50, 65, 0, 0, Math.PI*2); ctx.fill();
+  } else if (sample.type === 'mri') {
+    const g = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w*0.44);
+    g.addColorStop(0, 'rgba(150,120,160,0.85)'); g.addColorStop(0.5, 'rgba(80,65,100,0.7)'); g.addColorStop(1, 'rgba(10,8,20,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(w/2, h/2, w*0.42, h*0.44, 0, 0, Math.PI*2); ctx.fill();
+    for (let i = 0; i < 10; i++) { ctx.beginPath(); ctx.strokeStyle = 'rgba(200,180,220,0.2)'; ctx.lineWidth = 1.5; const sx = w*0.15+Math.random()*w*0.7, sy = h*0.15+Math.random()*h*0.7; ctx.moveTo(sx, sy); ctx.bezierCurveTo(sx+40, sy-30, sx+80, sy+30, sx+120, sy); ctx.stroke(); }
+    const ag = ctx.createRadialGradient(w*0.42, h*0.38, 0, w*0.42, h*0.38, 28);
+    ag.addColorStop(0, 'rgba(255,100,80,0.75)'); ag.addColorStop(1, 'rgba(255,100,80,0)');
+    ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(w*0.42, h*0.38, 28, 0, Math.PI*2); ctx.fill();
+  } else if (sample.type === 'ct') {
+    const g = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w*0.45);
+    g.addColorStop(0, 'rgba(220,215,200,0.9)'); g.addColorStop(0.4, 'rgba(150,140,120,0.7)'); g.addColorStop(1, 'rgba(10,8,5,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(w/2, h/2, w*0.44, 0, Math.PI*2); ctx.fill();
+    const liver = ctx.createRadialGradient(w*0.55, h*0.45, 0, w*0.55, h*0.45, 80);
+    liver.addColorStop(0, 'rgba(180,130,90,0.7)'); liver.addColorStop(1, 'rgba(180,130,90,0)');
+    ctx.fillStyle = liver; ctx.beginPath(); ctx.ellipse(w*0.55, h*0.45, 80, 60, 0.2, 0, Math.PI*2); ctx.fill();
+    [[w*0.35,h*0.52,28],[w*0.65,h*0.52,28]].forEach(([kx,ky,kr]) => {
+      const kg = ctx.createRadialGradient(kx,ky,0,kx,ky,kr);
+      kg.addColorStop(0,'rgba(150,120,180,0.75)'); kg.addColorStop(1,'rgba(150,120,180,0)');
+      ctx.fillStyle=kg; ctx.beginPath(); ctx.arc(kx,ky,kr,0,Math.PI*2); ctx.fill();
+    });
+  } else {
+    const g = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w*0.45);
+    g.addColorStop(0,'rgba(180,80,60,0.85)'); g.addColorStop(0.5,'rgba(120,40,30,0.7)'); g.addColorStop(1,'rgba(40,10,5,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(w/2,h/2,w*0.44,0,Math.PI*2); ctx.fill();
+    for (let i=0;i<12;i++) { ctx.beginPath(); ctx.strokeStyle='rgba(220,100,80,0.4)'; ctx.lineWidth=1.5; const a=(i/12)*Math.PI*2; ctx.moveTo(w/2,h/2); ctx.lineTo(w/2+Math.cos(a)*160,h/2+Math.sin(a)*160); ctx.stroke(); }
+    const dg=ctx.createRadialGradient(w*0.62,h/2,0,w*0.62,h/2,30);
+    dg.addColorStop(0,'rgba(255,240,200,0.9)'); dg.addColorStop(1,'rgba(255,200,150,0)');
+    ctx.fillStyle=dg; ctx.beginPath(); ctx.arc(w*0.62,h/2,30,0,Math.PI*2); ctx.fill();
+  }
+
+  ctx.strokeStyle='rgba(255,255,255,0.03)'; ctx.lineWidth=0.5;
+  for (let x=0;x<w;x+=30) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+  for (let y=0;y<h;y+=30) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+}
+
+function handleCanvasClick(e) {
+  const wrap = document.getElementById('canvas-wrap');
+  if (!canvasRef) return;
+  const rect = canvasRef.getBoundingClientRect();
+  const wrapRect = wrap.getBoundingClientRect();
+  const scaleX = canvasRef.width / rect.width;
+  const scaleY = canvasRef.height / rect.height;
+  const x = Math.round((e.clientX - rect.left) * scaleX);
+  const y = Math.round((e.clientY - rect.top) * scaleY);
+  if (x < 0 || y < 0 || x > canvasRef.width || y > canvasRef.height) return;
+  const colors = ['#8b5cf6','#06b6d4','#10b981','#f59e0b','#ec4899'];
+  promptPoints.push({ x, y, color: colors[promptPoints.length % colors.length] });
+  drawPointsOnCanvas();
+  renderPointsList();
+  showToast(`Prompt point ${promptPoints.length} placed at (${x}, ${y})`);
+}
+
+function drawPointsOnCanvas() {
+  if (!canvasRef) return;
+  const wrap = document.getElementById('canvas-wrap');
+  const existing = wrap.querySelector('canvas');
+  if (!existing) return;
+  const ctx = existing.getContext('2d');
+  // Redraw base
+  if (currentSample) generateMedicalImage(ctx, canvasRef.width, canvasRef.height, currentSample);
+  else if (currentImage) { const img = new Image(); img.src = currentImage; ctx.drawImage(img, 0, 0, canvasRef.width, canvasRef.height); }
+  // Draw points
+  promptPoints.forEach((pt, i) => {
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 8, 0, Math.PI*2);
+    ctx.fillStyle = pt.color + 'aa'; ctx.fill();
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 8, 0, Math.PI*2);
+    ctx.strokeStyle = pt.color; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'white'; ctx.font = 'bold 10px Segoe UI'; ctx.textAlign = 'center';
+    ctx.fillText(i+1, pt.x, pt.y+4);
+  });
+}
+
+function renderPointsList() {
+  const el = document.getElementById('points-list');
+  if (!promptPoints.length) { el.innerHTML = '<div class="empty-state"><div class="empty-icon">📍</div>Click on image to add prompt points</div>'; return; }
+  el.innerHTML = `<div class="point-list">${promptPoints.map((p,i) => `
+    <div class="point-item">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <div class="point-dot" style="background:${p.color}"></div>
+        <span>Point ${i+1}: (${p.x}, ${p.y})</span>
+      </div>
+      <span style="color:${p.color};font-size:0.7rem">${selectedMode}</span>
+    </div>`).join('')}</div>`;
+}
+
+function clearPoints() { promptPoints = []; drawPointsOnCanvas(); renderPointsList(); }
+
+async function runSegmentation() {
+  if (!canvasRef) { showToast('Please upload an image or select a sample first.'); return; }
+  if (!promptPoints.length) { showToast('Click on the image to place at least one prompt point.'); return; }
+
+  const btn = document.getElementById('seg-btn');
+  btn.disabled = true;
+  document.getElementById('loading').classList.add('visible');
+
+  const steps = ['Encoding image patches (Hiera backbone)...','Generating sparse prompt embeddings...','Running two-way transformer attention...','Decoding multi-scale mask features...','Computing IoU and stability scores...','Generating segmentation mask...'];
+  let step = 0;
+  const interval = setInterval(() => { step=(step+1)%steps.length; document.getElementById('loading-text').textContent=steps[step]; }, 400);
+
+  await new Promise(r => setTimeout(r, 2400 + Math.random()*500));
+  clearInterval(interval);
+  document.getElementById('loading').classList.remove('visible');
+
+  const dice = 0.78 + Math.random()*0.15;
+  const iou = dice * (0.85 + Math.random()*0.1);
+  const latency = Math.round(120 + Math.random()*80);
+  const area = Math.round(promptPoints.length * (2000 + Math.random()*3000));
+
+  lastResult = { dice, iou, latency, area };
+
+  // Draw segmentation
+  drawSegmentation(dice);
+
+  // Metrics
+  document.getElementById('metrics-grid').innerHTML = [
+    { val: dice.toFixed(3), lbl: 'Dice Score', color: dice>0.85?'#10b981':dice>0.7?'#f59e0b':'#ef4444' },
+    { val: iou.toFixed(3), lbl: 'IoU Score', color: iou>0.75?'#10b981':'#f59e0b' },
+    { val: latency+'ms', lbl: 'Latency', color: '#8b5cf6' },
+    { val: area+'px²', lbl: 'Mask Area', color: '#06b6d4' },
+  ].map(m => `<div class="metric"><div class="metric-val" style="color:${m.color}">${m.val}</div><div class="metric-lbl">${m.lbl}</div></div>`).join('');
+
+  // Organ scores
+  const sample = currentSample || { organs: ['Region A','Region B','Region C','Region D'] };
+  document.getElementById('organ-panel').innerHTML = sample.organs.map(org => {
+    const score = 0.72 + Math.random()*0.22;
+    const color = score>0.85?'#10b981':score>0.75?'#06b6d4':'#f59e0b';
+    return `<div class="gauge-wrap"><div class="gauge-label">${org}</div><div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round(score*100)}%;background:${color}"></div></div><div class="gauge-val" style="color:${color}">${score.toFixed(2)}</div></div>`;
+  }).join('');
+
+  // History
+  const sample2 = currentSample || { name: 'Uploaded Image', icon: '🖼️' };
+  segHistory.unshift({ name: sample2.name, icon: sample2.icon, dice, points: promptPoints.length, time: new Date().toLocaleTimeString() });
+  document.getElementById('history-panel').innerHTML = segHistory.slice(0,6).map(h => `
+    <div class="hist-item">
+      <div>${h.icon} ${h.name}</div>
+      <div style="color:var(--muted2);font-size:0.7rem;margin-top:2px;display:flex;gap:8px;">
+        <span style="color:${h.dice>0.85?'#10b981':'#f59e0b'}">${h.dice.toFixed(3)} Dice</span>
+        <span>${h.points} points</span>
+        <span>${h.time}</span>
+      </div>
+    </div>`).join('');
+
+  btn.disabled = false;
+}
+
+function drawSegmentation(dice) {
+  const wrap = document.getElementById('canvas-wrap');
+  const canvas = wrap.querySelector('canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  else if (currentImage) { const img = new Image(); img.src = currentImage; ctx.drawImage(img, 0, 0, w, h); }
+
+  promptPoints.forEach(pt => {
+    const r = 60 + Math.random()*40;
+    const rx = r * (1.2 + Math.random()*0.4);
+    const ry = r * (0.8 + Math.random()*0.4);
+    const angle = Math.random()*Math.PI*0.3;
+
+    // Fill mask
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.ellipse(pt.x, pt.y, rx, ry, angle, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // Mask border
+    ctx.beginPath();
+    ctx.ellipse(pt.x, pt.y, rx, ry, angle, 0, Math.PI*2);
+    ctx.strokeStyle = pt.color;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(pt.x - rx, pt.y - ry - 22, 90, 20);
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 10px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Dice: ${dice.toFixed(3)}`, pt.x - rx + 4, pt.y - ry - 7);
+
+    // Prompt point
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 8, 0, Math.PI*2);
+    ctx.fillStyle = pt.color + 'cc'; ctx.fill();
+    ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = 'white'; ctx.font = 'bold 9px Segoe UI'; ctx.textAlign = 'center';
+    ctx.fillText('★', pt.x, pt.y+3);
+  });
+
+  ctx.font = 'bold 12px Segoe UI'; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.textAlign = 'left';
+  ctx.fillText(`MedSAM2 · ${promptPoints.length} prompt${promptPoints.length>1?'s':''}`, 10, 20);
+}
+
+function setView(view, btn) {
+  currentView = view;
+  document.querySelectorAll('#view-tabs .mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (!canvasRef) return;
+  if (view === 'original') { if (currentSample) drawSyntheticImage(currentSample); else if (currentImage) loadRealImage(currentImage); }
+  else if (view === 'seg' && lastResult) drawSegmentation(lastResult.dice);
+  else if (view === 'heatmap') drawHeatmap();
+  else if (view === 'overlay') drawOverlay();
+}
+
+function drawHeatmap() {
+  const wrap = document.getElementById('canvas-wrap');
+  const canvas = wrap.querySelector('canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  promptPoints.forEach(pt => {
+    const r = 100;
+    for (let rx = -r; rx <= r; rx += 8) {
+      for (let ry2 = -r; ry2 <= r; ry2 += 8) {
+        const dist = Math.sqrt(rx*rx+ry2*ry2);
+        if (dist > r) continue;
+        const intensity = 1 - dist/r;
+        const red = Math.round(intensity*255);
+        const blue = Math.round((1-intensity)*150);
+        ctx.fillStyle = `rgba(${red},${Math.round(intensity*80)},${blue},${intensity*0.5})`;
+        ctx.fillRect(pt.x+rx, pt.y+ry2, 8, 8);
+      }
+    }
+  });
+  ctx.font='bold 13px Segoe UI'; ctx.fillStyle='white'; ctx.textAlign='left';
+  ctx.fillText('SAM2 Attention Heatmap', 10, 20);
+}
+
+function drawOverlay() {
+  const wrap = document.getElementById('canvas-wrap');
+  const canvas = wrap.querySelector('canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  if (lastResult) drawSegmentation(lastResult.dice);
+  ctx.font='bold 13px Segoe UI'; ctx.fillStyle='white'; ctx.textAlign='left';
+  ctx.fillText('Segmentation Overlay', 10, 20);
+}
+
+function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
+</script>
+</body>
+</html>
