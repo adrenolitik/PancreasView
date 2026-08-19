@@ -1,77 +1,74 @@
-# 🔬 MedSAM2 — Interactive Medical Image Segmentation
+# 🩻 PancreasView — Интерактивная сегментация КТ брюшной полости
 
-[![Live Demo](https://img.shields.io/badge/🔗-Live_Demo-8b5cf6)](https://shadman19.github.io/medsam2/)
+[![Live Demo](https://img.shields.io/badge/🔗-Live_Demo-8b5cf6)](https://adrenolitik.github.io/medsam2/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![SAM2](https://img.shields.io/badge/Meta-SAM2-blue)](https://github.com/facebookresearch/sam2)
 
-> Interactive medical image segmentation using Meta's Segment Anything Model 2 — click to place prompt points, get instant segmentation masks with Dice and IoU scoring.
+> Интерактивная сегментация КТ брюшной полости с использованием Segment Anything Model 2 от Meta — кликните для установки точек промпта, получайте мгновенные маски сегментации с оценкой Dice и IoU.
 
-**[Try the Live Demo →](https://shadman19.github.io/medsam2/)**
+**[Попробовать демо →](https://adrenolitik.github.io/medsam2/)**
 
 ---
 
-## What This Does
+## Что делает это приложение
 
-Upload any medical image. Click anywhere to place prompt points. Get instant segmentation masks with:
+Загрузите КТ-снимок брюшной полости. Кликните на изображение для установки точек промпта. Получите мгновенные маски сегментации с:
 
-- Dice Similarity Coefficient scoring
-- IoU (Intersection over Union) scoring
-- Per-organ performance breakdown
-- SAM2 attention heatmap visualization
-- Multi-point prompting support
-- Real-time latency measurement
+- Коэффициент сходства Dice (Dice Similarity Coefficient)
+- Оценка IoU (Intersection over Union)
+- Разбор по органам
+- Визуализация тепловой карты внимания SAM2
+- Поддержка многоточечного промптинга
+- Измерение задержки в реальном времени
 
-## Supported Modalities
+## Поддерживаемая модальность
 
-| Modality | Organs/Structures |
-|----------|-------------------|
-| 🫁 Chest X-Ray | Lung-L, Lung-R, Heart, Trachea |
-| 🧠 Brain MRI | Cortex, Ventricle, Cerebellum, Lesion |
-| 🩻 Abdominal CT | Liver, Kidney-L, Kidney-R, Spleen |
-| 👁️ Fundus | Optic Disc, Macula, Vessels, Lesion |
+| Модальность | Органы/Структуры |
+|------------|------------------|
+| 🩻 **КТ брюшной полости** | Печень, Почка слева, Почка справа, Селезенка, **Поджелудочная железа** |
 
-## SAM2 Pipeline
+## Конвейер SAM2
 
 ```
-Medical Image
+Медицинское изображение
       │
       ▼
 ┌─────────────────┐
-│  Hiera Encoder  │  Image → 256-dim patch features
+│  Hiera Encoder  │  Изображение → 256-мерные признаки патчей
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│ Prompt Encoder  │  Click points → sparse embeddings
+│ Prompt Encoder  │  Точки клика → разреженные эмбеддинги
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  Mask Decoder   │  Two-way transformer attention
+│  Mask Decoder   │  Двустороннее трансформерное внимание
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  Multi-Scale    │  FPN → high-resolution mask
+│  Multi-Scale    │  FPN → маска высокого разрешения
 │  Fusion (FPN)   │
 └────────┬────────┘
          │
          ▼
-  Mask + Dice + IoU
+  Маска + Dice + IoU
 ```
 
-## Usage
+## Использование
 
-Open `index.html` in any browser. No setup, no installation, no API key.
+Откройте `index.html` в любом браузере. Никакой настройки, установки или API-ключа не требуется.
 
-Or use the live demo: **https://shadman19.github.io/medsam2/**
+Или используйте живую демо: **https://adrenolitik.github.io/medsam2/**
 
-## Research Context
+## Научный контекст
 
 - Ravi et al. (2024) — SAM 2: Segment Anything in Images and Videos (Meta FAIR)
 - Ma et al. (2024) — Segment Anything in Medical Images (MedSAM, Nature Communications)
-- Related: False Negative Induction in Brain Tumor Segmentation by Trained Noise Attack (IEEE, 2023)
+- Связанное: False Negative Induction in Brain Tumor Segmentation by Trained Noise Attack (IEEE, 2023)
 
 ---
 
-*Built by Shadman Mahmood Khan Pathan · [GitHub](https://github.com/Shadman19) · [LinkedIn](https://linkedin.com/in/shadmanmahmood9)*
+*Переработано в PancreasView · [GitHub](https://github.com/adrenolitik/medsam2)*
