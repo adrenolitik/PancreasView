@@ -46,6 +46,8 @@ header {
 .dot.cyan { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
 .dot.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 .panel-body { padding: 1.25rem; }
+.hu-readout { position: absolute; display: none; pointer-events: none; background: rgba(10,14,24,0.88); border: 1px solid rgba(103,232,249,0.35); color: #67e8f9; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; z-index: 10; white-space: nowrap; }
+.wl-panel .wl-help { font-size: 0.68rem; color: var(--muted2); margin-top: 0.5rem; line-height: 1.5; }
 
 /* UPLOAD */
 .upload-zone { border: 2px dashed rgba(139,92,246,0.3); border-radius: 12px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: rgba(139,92,246,0.04); position: relative; }
@@ -206,6 +208,7 @@ header {
             <span class="wl-val" id="wl-center-val">40 HU</span>
           </div>
           <div class="wl-presets" id="wl-presets"></div>
+          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина. Обычный клик по-прежнему ставит точку промпта.</div>
           <div class="dicom-meta" id="dicom-meta"></div>
         </div>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
@@ -235,7 +238,8 @@ header {
           <button class="mode-btn" onclick="setView('overlay', this)">Наложение</button>
           <button class="mode-btn" onclick="setView('original', this)">Оригинал</button>
         </div>
-        <div class="canvas-wrap" id="canvas-wrap" onclick="handleCanvasClick(event)">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <div class="hu-readout" id="hu-readout"></div>
           <div class="canvas-placeholder">
             <div class="canvas-placeholder-icon">🩻</div>
             Загрузите изображение или выберите образец, затем кликните для установки точек промпта
@@ -528,7 +532,90 @@ function updateWlLabels() {
   w.value = wl.width; c.value = wl.center;
 }
 
-function setWl(ww, wc) { wl.width = Math.round(ww); wl.center = Math.round(wc); updateWlLabels(); if (dicomData) redrawDicomView(); }
+function clampWl() {
+  wl.width = Math.max(1, Math.min(4000, Math.round(wl.width)));
+  wl.center = Math.max(-1000, Math.min(2000, Math.round(wl.center)));
+}
+
+function setWl(ww, wc) { wl.width = ww; wl.center = wc; clampWl(); updateWlLabels(); if (dicomData) redrawDicomView(); }
+
+// Перерисовка с троттлингом по кадрам — при перетаскивании W/L это десятки событий в секунду
+let wlRafPending = false;
+function scheduleWlRedraw() {
+  if (wlRafPending) return;
+  wlRafPending = true;
+  requestAnimationFrame(() => { wlRafPending = false; redrawDicomView(); });
+}
+
+function hideHuReadout() { document.getElementById('hu-readout').style.display = 'none'; }
+
+// Значение HU и координаты под курсором (только для DICOM)
+function updateHuReadout(e) {
+  const el = document.getElementById('hu-readout');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!dicomData || !canvasRef || !wrap.contains(canvasRef)) { el.style.display = 'none'; return; }
+  const rect = canvasRef.getBoundingClientRect();
+  // Координаты считаем в исходной матрице DICOM, а не в масштабированном холсте
+  const nx = Math.floor((e.clientX - rect.left) * dicomData.width / rect.width);
+  const ny = Math.floor((e.clientY - rect.top) * dicomData.height / rect.height);
+  if (nx < 0 || ny < 0 || nx >= dicomData.width || ny >= dicomData.height) { el.style.display = 'none'; return; }
+  const hu = dicomData.pixels[ny * dicomData.width + nx];
+  el.textContent = `X ${nx} · Y ${ny} · ${hu} HU`;
+  el.style.display = 'block';
+  const wrapRect = wrap.getBoundingClientRect();
+  const left = Math.max(0, Math.min(e.clientX - wrapRect.left + 14, wrapRect.width - 150));
+  const top = Math.max(0, Math.min(e.clientY - wrapRect.top + 14, wrapRect.height - 26));
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+}
+
+// Мышиное управление окном W/L прямо на снимке + клик для точек промпта
+function initCanvasMouseControls() {
+  const wrap = document.getElementById('canvas-wrap');
+  let drag = null;
+
+  wrap.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    drag = { startX: e.clientX, startY: e.clientY, baseW: wl.width, baseC: wl.center, moved: false, dicom: !!dicomData };
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', e => {
+    updateHuReadout(e);
+    if (!drag) return;
+    const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return; // порог: дрожание мыши не отменяет установку точки
+    drag.moved = true;
+    if (!drag.dicom) return; // без DICOM перетаскивание ничего не меняет
+    const wFactor = drag.baseW >= 1000 ? 4 : drag.baseW >= 200 ? 2 : 1;
+    const cFactor = Math.abs(dy) > 200 ? 3 : 1;
+    wl.width = drag.baseW + dx * wFactor;
+    wl.center = drag.baseC - dy * cFactor;
+    clampWl();
+    updateWlLabels();
+    scheduleWlRedraw();
+  });
+
+  window.addEventListener('mouseup', e => {
+    if (!drag) return;
+    const wasClick = !drag.moved;
+    drag = null;
+    if (wasClick) handleCanvasClick(e); // обычный клик — точка промпта
+  });
+
+  wrap.addEventListener('mouseleave', hideHuReadout);
+
+  wrap.addEventListener('wheel', e => {
+    if (!dicomData) return;
+    e.preventDefault();
+    const step = Math.max(1, Math.round(wl.width * 0.05));
+    if (e.shiftKey) wl.width += (e.deltaY < 0 ? step : -step);
+    else wl.center += (e.deltaY < 0 ? step : -step);
+    clampWl();
+    updateWlLabels();
+    scheduleWlRedraw();
+  }, { passive: false });
+}
 
 function redrawDicomView() {
   const wrap = document.getElementById('canvas-wrap');
@@ -560,7 +647,7 @@ function loadDicomFile(file) {
     document.getElementById('wl-patient').textContent = dicomData.meta.patient ? dicomData.meta.patient : '';
     document.getElementById('wl-panel').classList.add('visible');
     const wrap = document.getElementById('canvas-wrap');
-    wrap.innerHTML = '';
+    replaceCanvas(wrap);
     const canvas = document.createElement('canvas');
     const maxW = 600, maxH = 500;
     let w = dicomData.width, h = dicomData.height;
@@ -570,7 +657,7 @@ function loadDicomFile(file) {
     canvasRef = canvas;
     wrap.appendChild(canvas);
     renderDicomToCanvas(canvas.getContext('2d'));
-    showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · настройте окно W/L');
+    showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · тяните мышью по снимку для окна W/L');
   };
   reader.readAsArrayBuffer(file);
 }
@@ -583,6 +670,7 @@ function plural(n, one, few, many) {
 }
 
 buildWlPanel();
+initCanvasMouseControls();
 
 // Build samples
 const samplesRow = document.getElementById('samples-row');
@@ -616,6 +704,7 @@ function resetForNewImage() {
   promptPoints = []; maskShapes = new Map(); lastResult = null; dicomData = null;
   document.getElementById('export-row').style.display = 'none';
   document.getElementById('wl-panel').classList.remove('visible');
+  hideHuReadout();
 }
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0];
@@ -628,9 +717,14 @@ zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add(
 zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
 zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (!file) return; if (isDicomFile(file) || !file.type.startsWith('image/')) { if (isDicomFile(file)) { resetForNewImage(); loadDicomFile(file); } else { showToast('Поддерживаются изображения и DICOM-файлы (.dcm).'); } return; } const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file); });
 
+// Заменяет холст в canvas-wrap, сохраняя постоянные элементы (плашка HU)
+function replaceCanvas(wrap) {
+  wrap.querySelectorAll('canvas').forEach(c => c.remove());
+}
+
 function loadRealImage(src) {
   const wrap = document.getElementById('canvas-wrap');
-  wrap.innerHTML = '';
+  replaceCanvas(wrap);
   const canvas = document.createElement('canvas');
   const img = new Image();
   img.onload = () => {
@@ -650,7 +744,7 @@ function loadRealImage(src) {
 
 function drawSyntheticImage(sample) {
   const wrap = document.getElementById('canvas-wrap');
-  wrap.innerHTML = '';
+  replaceCanvas(wrap);
   const canvas = document.createElement('canvas');
   canvas.width = 500; canvas.height = 420;
   const ctx = canvas.getContext('2d');
@@ -1137,7 +1231,7 @@ function applyReportToCanvas(report) {
   }
   // Иначе создаём нейтральный холст отчётного размера: само изображение в отчёт не входит
   const wrap = document.getElementById('canvas-wrap');
-  wrap.innerHTML = '';
+  replaceCanvas(wrap);
   const canvas = document.createElement('canvas');
   canvas.width = (Array.isArray(size) && size[0]) || (usable ? canvasRef.width : 500);
   canvas.height = (Array.isArray(size) && size[1]) || (usable ? canvasRef.height : 420);
