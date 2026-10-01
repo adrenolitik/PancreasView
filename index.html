@@ -47,6 +47,10 @@ header {
 .dot.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 .panel-body { padding: 1.25rem; }
 .hu-readout { position: absolute; display: none; pointer-events: none; background: rgba(10,14,24,0.88); border: 1px solid rgba(103,232,249,0.35); color: #67e8f9; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; z-index: 10; white-space: nowrap; }
+.zoom-badge { position: absolute; top: 10px; right: 10px; display: none; align-items: center; gap: 6px; background: rgba(10,14,24,0.88); border: 1px solid rgba(139,92,246,0.35); color: #c4b5fd; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; z-index: 10; cursor: pointer; user-select: none; }
+.zoom-badge:hover { color: #e9d5ff; border-color: var(--accent); }
+.canvas-wrap.is-panning { cursor: move !important; }
+.canvas-wrap canvas { max-width: 100%; display: block; transform-origin: center center; }
 .wl-panel .wl-help { font-size: 0.68rem; color: var(--muted2); margin-top: 0.5rem; line-height: 1.5; }
 
 /* UPLOAD */
@@ -208,7 +212,7 @@ header {
             <span class="wl-val" id="wl-center-val">40 HU</span>
           </div>
           <div class="wl-presets" id="wl-presets"></div>
-          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина. Обычный клик по-прежнему ставит точку промпта.</div>
+          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина; <b>Ctrl+колесо</b> — зум к курсору, <b>средняя кнопка</b> — панорама, <b>двойной клик</b> — сброс вида. Обычный клик ставит точку промпта.</div>
           <div class="dicom-meta" id="dicom-meta"></div>
         </div>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
@@ -240,6 +244,9 @@ header {
         </div>
         <div class="canvas-wrap" id="canvas-wrap">
           <div class="hu-readout" id="hu-readout"></div>
+          <div class="zoom-badge" id="zoom-badge" title="Сбросить зум и панораму (двойной клик тоже работает)">
+            <span id="zoom-badge-text"></span><span>✕</span>
+          </div>
           <div class="canvas-placeholder">
             <div class="canvas-placeholder-icon">🩻</div>
             Загрузите изображение или выберите образец, затем кликните для установки точек промпта
@@ -549,6 +556,111 @@ function scheduleWlRedraw() {
 
 function hideHuReadout() { document.getElementById('hu-readout').style.display = 'none'; }
 
+// ===== ЗУМ И ПАНОРАМА =====
+// Зум реализован CSS-transform'ом на canvas: быстро и не влияет на отрисовку слоёв.
+// Все координатные пересчёты идут через getBoundingClientRect(), который учитывает transform,
+// поэтому клики точек промпта, HU-плашка и W/L работают на любом масштабе без правок.
+const ZOOM_MIN = 0.5, ZOOM_MAX = 12;
+let zoomLevel = 1, panX = 0, panY = 0;
+
+function clampPan() {
+  if (!canvasRef) return;
+  const wrap = document.getElementById('canvas-wrap');
+  const rect = canvasRef.getBoundingClientRect(); // масштабированный размер с учётом зума
+  // Снимок не должен улетать за край: допускаем сдвиг до половины выступающей части + небольшой запас
+  const maxShiftX = Math.max(0, (rect.width - wrap.clientWidth) / 2 + 40);
+  const maxShiftY = Math.max(0, (rect.height - wrap.clientHeight) / 2 + 40);
+  panX = Math.max(-maxShiftX, Math.min(maxShiftX, panX));
+  panY = Math.max(-maxShiftY, Math.min(maxShiftY, panY));
+}
+
+function applyViewTransform() {
+  if (!canvasRef) return;
+  canvasRef.style.transform = zoomLevel === 1 && !panX && !panY ? '' : `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+  const badge = document.getElementById('zoom-badge');
+  if (zoomLevel !== 1 || panX || panY) {
+    document.getElementById('zoom-badge-text').textContent = Math.round(zoomLevel * 100) + '%';
+    badge.style.display = 'flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function resetViewTransform() {
+  zoomLevel = 1; panX = 0; panY = 0;
+  applyViewTransform();
+  showToast('Вид сброшен: масштаб 100%');
+}
+
+function zoomAt(clientX, clientY, factor) {
+  if (!canvasRef) return;
+  const rect = canvasRef.getBoundingClientRect(); // с текущим transform
+  const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomLevel * factor));
+  if (newZoom === zoomLevel) return;
+  // Точка снимка под курсором должна остаться под курсором после смены масштаба.
+  // Экранная позиция точки = canvasCenter + pan + offsetInImage * zoom.
+  const oldCenterX = rect.left + rect.width / 2;
+  const oldCenterY = rect.top + rect.height / 2;
+  const pointOffsetX = (clientX - oldCenterX - panX) / zoomLevel; // смещение точки от центра в системе снимка
+  const pointOffsetY = (clientY - oldCenterY - panY) / zoomLevel;
+  panX += pointOffsetX * (zoomLevel - newZoom);
+  panY += pointOffsetY * (zoomLevel - newZoom);
+  zoomLevel = newZoom;
+  clampPan();
+  applyViewTransform();
+}
+
+function initCanvasZoomPan() {
+  const wrap = document.getElementById('canvas-wrap');
+  const badge = document.getElementById('zoom-badge');
+
+  // Ctrl+колесо — зум к курсору; отделяем от W/L-колеса по ctrlKey
+  wrap.addEventListener('wheel', e => {
+    if (!e.ctrlKey || !canvasRef || !wrap.contains(canvasRef)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const factor = Math.pow(1.0015, -e.deltaY);
+    zoomAt(e.clientX, e.clientY, factor);
+    hideHuReadout(); // пересчёт координат после масштабирования — покажется на следующем движении мыши
+  }, { passive: false, capture: true });
+
+  // Средняя кнопка — панорама
+  let panning = null;
+  wrap.addEventListener('mousedown', e => {
+    if (e.button !== 1 || !canvasRef) return;
+    e.preventDefault();
+    e.stopPropagation();
+    panning = { startX: e.clientX, startY: e.clientY, baseX: panX, baseY: panY };
+    wrap.classList.add('is-panning');
+  });
+
+  window.addEventListener('mousemove', e => {
+    if (!panning) return;
+    panX = panning.baseX + (e.clientX - panning.startX);
+    panY = panning.baseY + (e.clientY - panning.startY);
+    clampPan();
+    applyViewTransform();
+  });
+
+  window.addEventListener('mouseup', e => {
+    if (!panning || e.button !== 1) return;
+    panning = null;
+    wrap.classList.remove('is-panning');
+  });
+
+  // Двойной клик — сброс вида (без установки точки)
+  wrap.addEventListener('dblclick', e => {
+    if (!canvasRef) return;
+    e.stopPropagation();
+    if (zoomLevel !== 1 || panX || panY) resetViewTransform();
+  });
+
+  badge.addEventListener('click', resetViewTransform);
+
+  // Двойной клик браузера по средней кнопке может вызвать автопрокрутку — глушим
+  wrap.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+}
+
 // Значение HU и координаты под курсором (только для DICOM)
 function updateHuReadout(e) {
   const el = document.getElementById('hu-readout');
@@ -653,10 +765,11 @@ function loadDicomFile(file) {
     let w = dicomData.width, h = dicomData.height;
     if (w > maxW) { h = h * maxW / w; w = maxW; }
     if (h > maxH) { w = w * maxH / h; h = maxH; }
-    canvas.width = w; canvas.height = h;
-    canvasRef = canvas;
-    wrap.appendChild(canvas);
-    renderDicomToCanvas(canvas.getContext('2d'));
+  canvas.width = w; canvas.height = h;
+  canvasRef = canvas;
+  wrap.appendChild(canvas);
+  zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
+  renderDicomToCanvas(canvas.getContext('2d'));
     showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · тяните мышью по снимку для окна W/L');
   };
   reader.readAsArrayBuffer(file);
@@ -671,6 +784,7 @@ function plural(n, one, few, many) {
 
 buildWlPanel();
 initCanvasMouseControls();
+initCanvasZoomPan();
 
 // Build samples
 const samplesRow = document.getElementById('samples-row');
@@ -705,6 +819,7 @@ function resetForNewImage() {
   document.getElementById('export-row').style.display = 'none';
   document.getElementById('wl-panel').classList.remove('visible');
   hideHuReadout();
+  zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
 }
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0];
@@ -720,6 +835,7 @@ zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('
 // Заменяет холст в canvas-wrap, сохраняя постоянные элементы (плашка HU)
 function replaceCanvas(wrap) {
   wrap.querySelectorAll('canvas').forEach(c => c.remove());
+  zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
 }
 
 function loadRealImage(src) {
