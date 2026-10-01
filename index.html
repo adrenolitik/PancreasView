@@ -291,6 +291,19 @@ let currentView = 'seg';
 let segHistory = [];
 let lastResult = null;
 let canvasRef = null;
+let loadedImgEl = null; // загруженный HTMLImageElement для перерисовки без гонки с onload
+
+function redrawBase(ctx, w, h) {
+  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  else if (loadedImgEl) ctx.drawImage(loadedImgEl, 0, 0, w, h);
+}
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
 
 // Build samples
 const samplesRow = document.getElementById('samples-row');
@@ -298,7 +311,7 @@ SAMPLES.forEach(s => {
   const btn = document.createElement('button');
   btn.className = 'sample-btn';
   btn.textContent = `${s.icon} ${s.name}`;
-  btn.onclick = () => { currentSample = s; currentImage = null; promptPoints = []; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
+  btn.onclick = () => { currentSample = s; currentImage = null; loadedImgEl = null; promptPoints = []; lastResult = null; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
   samplesRow.appendChild(btn);
 });
 
@@ -332,6 +345,7 @@ function loadRealImage(src) {
   const canvas = document.createElement('canvas');
   const img = new Image();
   img.onload = () => {
+    loadedImgEl = img;
     const maxW = 600, maxH = 500;
     let w = img.width, h = img.height;
     if (w > maxW) { h = h * maxW / w; w = maxW; }
@@ -434,7 +448,7 @@ function generateMedicalImage(ctx, w, h, sample) {
 
 function handleCanvasClick(e) {
   const wrap = document.getElementById('canvas-wrap');
-  if (!canvasRef) return;
+  if (!canvasRef || !wrap.contains(canvasRef)) return;
   const rect = canvasRef.getBoundingClientRect();
   const wrapRect = wrap.getBoundingClientRect();
   const scaleX = canvasRef.width / rect.width;
@@ -456,8 +470,7 @@ function drawPointsOnCanvas() {
   if (!existing) return;
   const ctx = existing.getContext('2d');
   // Redraw base
-  if (currentSample) generateMedicalImage(ctx, canvasRef.width, canvasRef.height, currentSample);
-  else if (currentImage) { const img = new Image(); img.src = currentImage; ctx.drawImage(img, 0, 0, canvasRef.width, canvasRef.height); }
+  redrawBase(ctx, canvasRef.width, canvasRef.height);
   // Draw points
   promptPoints.forEach((pt, i) => {
     ctx.beginPath(); ctx.arc(pt.x, pt.y, 8, 0, Math.PI*2);
@@ -478,11 +491,18 @@ function renderPointsList() {
         <div class="point-dot" style="background:${p.color}"></div>
         <span>Точка ${i+1}: (${p.x}, ${p.y})</span>
       </div>
-      <span style="color:${p.color};font-size:0.7rem">${selectedMode}</span>
+      <span style="color:${p.color};font-size:0.7rem">${(MODES.find(m => m.id === selectedMode) || {}).label || selectedMode}</span>
     </div>`).join('')}</div>`;
 }
 
-function clearPoints() { promptPoints = []; drawPointsOnCanvas(); renderPointsList(); }
+function clearPoints() {
+  promptPoints = [];
+  lastResult = null;
+  if (canvasRef && document.getElementById('canvas-wrap').contains(canvasRef)) {
+    redrawBase(canvasRef.getContext('2d'), canvasRef.width, canvasRef.height);
+  }
+  renderPointsList();
+}
 
 async function runSegmentation() {
   if (!canvasRef) { showToast('Сначала загрузите изображение или выберите образец.'); return; }
@@ -556,8 +576,7 @@ function drawSegmentation(dice) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
 
-  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
-  else if (currentImage) { const img = new Image(); img.src = currentImage; ctx.drawImage(img, 0, 0, w, h); }
+  redrawBase(ctx, w, h);
 
   promptPoints.forEach(pt => {
     const r = 60 + Math.random()*40;
@@ -600,7 +619,7 @@ function drawSegmentation(dice) {
   });
 
   ctx.font = 'bold 12px Segoe UI'; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.textAlign = 'left';
-  ctx.fillText(`PancreasView · ${promptPoints.length} промпт${promptPoints.length>1?'а':''}`, 10, 20);
+  ctx.fillText(`PancreasView · ${promptPoints.length} ${plural(promptPoints.length, 'промпт', 'промпта', 'промптов')}`, 10, 20);
 }
 
 function setView(view, btn) {
@@ -612,6 +631,7 @@ function setView(view, btn) {
   else if (view === 'seg' && lastResult) drawSegmentation(lastResult.dice);
   else if (view === 'heatmap') drawHeatmap();
   else if (view === 'overlay') drawOverlay();
+  else if (view === 'seg') drawPointsOnCanvas();
 }
 
 function drawHeatmap() {
@@ -620,7 +640,7 @@ function drawHeatmap() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
-  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  redrawBase(ctx, w, h);
   promptPoints.forEach(pt => {
     const r = 100;
     for (let rx = -r; rx <= r; rx += 8) {
@@ -645,7 +665,7 @@ function drawOverlay() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
-  if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
+  redrawBase(ctx, w, h);
   if (lastResult) drawSegmentation(lastResult.dice);
   ctx.font='bold 13px Segoe UI'; ctx.fillStyle='white'; ctx.textAlign='left';
   ctx.fillText('Наложение сегментации', 10, 20);

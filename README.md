@@ -1,12 +1,12 @@
 # 🩻 PancreasView — Интерактивная сегментация КТ брюшной полости
 
-[![Live Demo](https://img.shields.io/badge/🔗-Live_Demo-8b5cf6)](https://adrenolitik.github.io/medsam2/)
+[![Live Demo](https://img.shields.io/badge/🔗-Live_Demo-8b5cf6)](https://adrenolitik.github.io/PancreasView/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![SAM2](https://img.shields.io/badge/Meta-SAM2-blue)](https://github.com/facebookresearch/sam2)
 
 > Интерактивная сегментация КТ брюшной полости с использованием Segment Anything Model 2 от Meta — кликните для установки точек промпта, получайте мгновенные маски сегментации с оценкой Dice и IoU.
 
-**[Попробовать демо →](https://adrenolitik.github.io/medsam2/)**
+**[Попробовать демо →](https://adrenolitik.github.io/PancreasView/)**
 
 ---
 
@@ -61,7 +61,7 @@
 
 Откройте `index.html` в любом браузере. Никакой настройки, установки или API-ключа не требуется.
 
-Или используйте живую демо: **https://adrenolitik.github.io/medsam2/**
+Или используйте живую демо: **https://adrenolitik.github.io/PancreasView/**
 
 ## Научный контекст
 
@@ -71,4 +71,4 @@
 
 ---
 
-*Переработано в PancreasView · [GitHub](https://github.com/adrenolitik/medsam2)*
+*Переработано в PancreasView · [GitHub](https://github.com/adrenolitik/PancreasView)*
