@@ -120,6 +120,12 @@ header {
 .toast.show { transform: translateY(0); opacity: 1; }
 
 .hint { font-size: 0.75rem; color: var(--muted2); margin-top: 0.5rem; text-align: center; }
+
+/* EXPORT */
+.export-row { display: flex; gap: 6px; margin-top: 0.5rem; }
+.export-btn { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 0.5rem 0.4rem; border-radius: 8px; font-size: 0.72rem; cursor: pointer; font-family: inherit; transition: all 0.2s; white-space: nowrap; }
+.export-btn:hover { border-color: var(--accent); color: #c4b5fd; }
+.export-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border); color: var(--muted2); }
 </style>
 </head>
 <body>
@@ -173,6 +179,11 @@ header {
           <span>✂️</span> Сегментировать
         </button>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
+        <div class="export-row" id="export-row" style="display:none;">
+          <button class="export-btn" id="exp-png" onclick="exportMaskPNG()">🖼️ Маска PNG</button>
+          <button class="export-btn" id="exp-json" onclick="exportReport('json')">📋 JSON</button>
+          <button class="export-btn" id="exp-csv" onclick="exportReport('csv')">📊 CSV</button>
+        </div>
         <div class="hint">💡 Кликните на изображение для установки точек промпта, затем нажмите «Сегментировать»</div>
 
         <div class="loading" id="loading">
@@ -292,6 +303,7 @@ let segHistory = [];
 let lastResult = null;
 let canvasRef = null;
 let loadedImgEl = null; // загруженный HTMLImageElement для перерисовки без гонки с onload
+let maskShapes = new Map(); // детерминированные формы масок "x,y" → {rx, ry, angle}, фиксируются на момент сегментации
 
 function redrawBase(ctx, w, h) {
   if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
@@ -311,7 +323,7 @@ SAMPLES.forEach(s => {
   const btn = document.createElement('button');
   btn.className = 'sample-btn';
   btn.textContent = `${s.icon} ${s.name}`;
-  btn.onclick = () => { currentSample = s; currentImage = null; loadedImgEl = null; promptPoints = []; lastResult = null; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
+  btn.onclick = () => { currentSample = s; currentImage = null; loadedImgEl = null; promptPoints = []; lastResult = null; maskShapes = new Map(); document.getElementById('export-row').style.display = 'none'; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
   samplesRow.appendChild(btn);
 });
 
@@ -332,12 +344,12 @@ MODES.forEach((m, i) => {
 // File upload
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0];
-  if (file) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }
+  if (file) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; maskShapes = new Map(); lastResult = null; document.getElementById('export-row').style.display = 'none'; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }
 });
 const zone = document.getElementById('upload-zone');
 zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
 zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (file && file.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }});
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (file && file.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; maskShapes = new Map(); lastResult = null; document.getElementById('export-row').style.display = 'none'; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }});
 
 function loadRealImage(src) {
   const wrap = document.getElementById('canvas-wrap');
@@ -498,6 +510,8 @@ function renderPointsList() {
 function clearPoints() {
   promptPoints = [];
   lastResult = null;
+  maskShapes = new Map();
+  document.getElementById('export-row').style.display = 'none';
   if (canvasRef && document.getElementById('canvas-wrap').contains(canvasRef)) {
     redrawBase(canvasRef.getContext('2d'), canvasRef.width, canvasRef.height);
   }
@@ -532,7 +546,22 @@ async function runSegmentation() {
   const latency = Math.round(120 + Math.random()*80);
   const area = Math.round(promptPoints.length * (2000 + Math.random()*3000));
 
-  lastResult = { dice, iou, latency, area };
+  // Оценки по органам (заполняются ниже, нужны для отчёта)
+  const organs = {};
+
+  // Фиксируем форму масок на момент сегментации — экспорт и перерисовка совпадают с экраном
+  maskShapes = new Map();
+  promptPoints.forEach(pt => {
+    const r = 60 + Math.random()*40;
+    maskShapes.set(pt.x + ',' + pt.y, {
+      rx: r * (1.2 + Math.random()*0.4),
+      ry: r * (0.8 + Math.random()*0.4),
+      angle: Math.random()*Math.PI*0.3
+    });
+  });
+
+  lastResult = { dice, iou, latency, area, mode: selectedMode, shapes: maskShapes, organs, timestamp: new Date().toISOString() };
+  document.getElementById('export-row').style.display = 'flex';
 
   // Draw segmentation
   drawSegmentation(dice);
@@ -549,6 +578,7 @@ async function runSegmentation() {
   const sample = currentSample || { organs: ['Область А','Область Б','Область В','Область Г','Область Д'] };
   document.getElementById('organ-panel').innerHTML = sample.organs.map(org => {
     const score = 0.72 + Math.random()*0.22;
+    organs[org] = +score.toFixed(3);
     const color = score>0.85?'#10b981':score>0.75?'#06b6d4':'#f59e0b';
     return `<div class="gauge-wrap"><div class="gauge-label">${org}</div><div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round(score*100)}%;background:${color}"></div></div><div class="gauge-val" style="color:${color}">${score.toFixed(2)}</div></div>`;
   }).join('');
@@ -579,10 +609,9 @@ function drawSegmentation(dice) {
   redrawBase(ctx, w, h);
 
   promptPoints.forEach(pt => {
-    const r = 60 + Math.random()*40;
-    const rx = r * (1.2 + Math.random()*0.4);
-    const ry = r * (0.8 + Math.random()*0.4);
-    const angle = Math.random()*Math.PI*0.3;
+    const shape = maskShapes.get(pt.x + ',' + pt.y);
+    if (!shape) return;
+    const { rx, ry, angle } = shape;
 
     // Fill mask
     ctx.save();
@@ -669,6 +698,113 @@ function drawOverlay() {
   if (lastResult) drawSegmentation(lastResult.dice);
   ctx.font='bold 13px Segoe UI'; ctx.fillStyle='white'; ctx.textAlign='left';
   ctx.fillText('Наложение сегментации', 10, 20);
+}
+
+// ===== EXPORT =====
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function timestampSlug() {
+  return (lastResult.timestamp || new Date().toISOString()).replace(/[:.]/g, '-').slice(0, 19);
+}
+
+function exportBaseName(ext) {
+  return `pancreasview_${timestampSlug()}.${ext}`;
+}
+
+function buildMaskCanvas() {
+  const w = canvasRef.width, h = canvasRef.height;
+  const mc = document.createElement('canvas');
+  mc.width = w; mc.height = h;
+  const ctx = mc.getContext('2d');
+  // Чёрный фон, непрозрачные цветные маски без подписей/точек — пригодно для постобработки
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+  lastResult.shapes.forEach((shape, key) => {
+    const [x, y] = key.split(',').map(Number);
+    ctx.beginPath();
+    ctx.ellipse(x, y, shape.rx, shape.ry, shape.angle, 0, Math.PI*2);
+    ctx.fillStyle = promptPoints.find(p => p.x === x && p.y === y)?.color || '#8b5cf6';
+    ctx.fill();
+  });
+  return mc;
+}
+
+function exportMaskPNG() {
+  if (!lastResult || !canvasRef) { showToast('Сначала запустите сегментацию.'); return; }
+  const name = exportBaseName('mask.png'); // фиксируем имя до асинхронного toBlob
+  buildMaskCanvas().toBlob(blob => {
+    if (!blob) { showToast('Не удалось создать PNG маски.'); return; }
+    downloadBlob(blob, name);
+    showToast('Маска PNG сохранена.');
+  }, 'image/png');
+}
+
+function buildReport() {
+  const modeLabel = (MODES.find(m => m.id === lastResult.mode) || {}).label || lastResult.mode;
+  const shapes = [];
+  lastResult.shapes.forEach((shape, key) => {
+    const [x, y] = key.split(',').map(Number);
+    shapes.push({ point: [x, y], rx: Math.round(shape.rx), ry: Math.round(shape.ry), angle_deg: +(shape.angle*180/Math.PI).toFixed(1) });
+  });
+  return {
+    app: 'PancreasView',
+    version: '1.1.0',
+    created_at: lastResult.timestamp,
+    mode: modeLabel,
+    image_source: currentSample ? currentSample.name : 'загруженное изображение',
+    metrics: {
+      dice: +lastResult.dice.toFixed(3),
+      iou: +lastResult.iou.toFixed(3),
+      latency_ms: lastResult.latency,
+      mask_area_px: lastResult.area,
+      canvas_size: [canvasRef.width, canvasRef.height]
+    },
+    prompt_points: promptPoints.map((p, i) => ({ index: i+1, x: p.x, y: p.y, color: p.color })),
+    mask_shapes: shapes,
+    organ_scores: lastResult.organs,
+    disclaimer: 'Демонстрационное приложение. Не для клинического использования.'
+  };
+}
+
+function exportReport(format) {
+  if (!lastResult || !canvasRef) { showToast('Сначала запустите сегментацию.'); return; }
+  const report = buildReport();
+  if (format === 'json') {
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, exportBaseName('json'));
+    showToast('Отчёт JSON сохранён.');
+  } else {
+    const esc = v => { const s = String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [
+      ['metric', 'value'].join(','),
+      ['application', report.app].join(','),
+      ['created_at', report.created_at].join(','),
+      ['mode', report.mode].join(','),
+      ['image_source', report.image_source].join(','),
+      ['dice', report.metrics.dice].join(','),
+      ['iou', report.metrics.iou].join(','),
+      ['latency_ms', report.metrics.latency_ms].join(','),
+      ['mask_area_px', report.metrics.mask_area_px].join(','),
+      ['canvas_width', report.metrics.canvas_size[0]].join(','),
+      ['canvas_height', report.metrics.canvas_size[1]].join(','),
+      ['prompt_points_count', report.prompt_points.length].join(','),
+      ...report.prompt_points.map(p => ['prompt_point_' + p.index, `${p.x},${p.y} (${p.color})`].join(','))
+    ];
+    Object.entries(report.organ_scores || {}).forEach(([name, score]) => lines.push('organ_score,' + esc(name) + ',' + score));
+    lines.push(['disclaimer', report.disclaimer].join(','));
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    downloadBlob(blob, exportBaseName('csv'));
+    showToast('Отчёт CSV сохранён.');
+  }
 }
 
 function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
