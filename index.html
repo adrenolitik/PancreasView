@@ -126,6 +126,21 @@ header {
 .export-btn { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 0.5rem 0.4rem; border-radius: 8px; font-size: 0.72rem; cursor: pointer; font-family: inherit; transition: all 0.2s; white-space: nowrap; }
 .export-btn:hover { border-color: var(--accent); color: #c4b5fd; }
 .export-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border); color: var(--muted2); }
+
+/* DICOM W/L */
+.wl-panel { display: none; margin-top: 0.75rem; border: 1px solid rgba(6,182,212,0.25); border-radius: 10px; padding: 0.75rem; background: rgba(6,182,212,0.04); }
+.wl-panel.visible { display: block; }
+.wl-title { font-size: 0.72rem; font-weight: 600; color: #67e8f9; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+.wl-title span:last-child { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted2); font-size: 0.7rem; }
+.wl-slider-row { display: flex; align-items: center; gap: 8px; margin: 0.35rem 0; }
+.wl-slider-row label { font-size: 0.72rem; color: var(--muted2); min-width: 58px; }
+.wl-slider-row input[type=range] { flex: 1; accent-color: var(--accent2); }
+.wl-slider-row .wl-val { font-size: 0.72rem; font-weight: 600; min-width: 52px; text-align: right; color: #c4b5fd; }
+.wl-presets { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 0.5rem; }
+.wl-preset-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); padding: 3px 9px; border-radius: 7px; font-size: 0.68rem; cursor: pointer; font-family: inherit; transition: all 0.2s; }
+.wl-preset-btn:hover { border-color: var(--accent2); color: #67e8f9; }
+.dicom-meta { font-size: 0.7rem; color: var(--muted2); margin-top: 0.5rem; line-height: 1.5; }
+.dicom-meta b { color: var(--muted2); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -159,10 +174,10 @@ header {
       <div class="panel-hdr"><div class="dot"></div> Загрузка изображения</div>
       <div class="panel-body">
         <div class="upload-zone" id="upload-zone">
-          <input type="file" class="upload-input" id="file-input" accept="image/*">
+          <input type="file" class="upload-input" id="file-input" accept="image/*,.dcm">
           <div class="upload-icon">🩻</div>
           <div class="upload-title">Перетащите КТ-снимок или кликните для загрузки</div>
-          <div class="upload-sub">КТ брюшной полости · PNG, JPG · Любой реальный медицинский снимок</div>
+          <div class="upload-sub">КТ брюшной полости · PNG, JPG, DICOM (.dcm) · Любой реальный медицинский снимок</div>
         </div>
 
         <div style="margin-top:0.75rem;">
@@ -178,12 +193,29 @@ header {
         <button class="segment-btn" id="seg-btn" onclick="runSegmentation()">
           <span>✂️</span> Сегментировать
         </button>
+        <div class="wl-panel" id="wl-panel">
+          <div class="wl-title"><span>Окно уровня (Window/Level)</span><span id="wl-patient"></span></div>
+          <div class="wl-slider-row">
+            <label>Ширина (W)</label>
+            <input type="range" id="wl-width" min="1" max="4000" value="400" step="1">
+            <span class="wl-val" id="wl-width-val">400 HU</span>
+          </div>
+          <div class="wl-slider-row">
+            <label>Центр (L)</label>
+            <input type="range" id="wl-center" min="-1000" max="2000" value="40" step="1">
+            <span class="wl-val" id="wl-center-val">40 HU</span>
+          </div>
+          <div class="wl-presets" id="wl-presets"></div>
+          <div class="dicom-meta" id="dicom-meta"></div>
+        </div>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
         <div class="export-row" id="export-row" style="display:none;">
           <button class="export-btn" id="exp-png" onclick="exportMaskPNG()">🖼️ Маска PNG</button>
           <button class="export-btn" id="exp-json" onclick="exportReport('json')">📋 JSON</button>
           <button class="export-btn" id="exp-csv" onclick="exportReport('csv')">📊 CSV</button>
         </div>
+        <button class="clear-btn" onclick="document.getElementById('report-input').click()" style="margin-top:0.5rem;">📥 Восстановить сессию (JSON)</button>
+        <input type="file" id="report-input" accept=".json,application/json" style="display:none;">
         <div class="hint">💡 Кликните на изображение для установки точек промпта, затем нажмите «Сегментировать»</div>
 
         <div class="loading" id="loading">
@@ -304,10 +336,243 @@ let lastResult = null;
 let canvasRef = null;
 let loadedImgEl = null; // загруженный HTMLImageElement для перерисовки без гонки с onload
 let maskShapes = new Map(); // детерминированные формы масок "x,y" → {rx, ry, angle}, фиксируются на момент сегментации
+let dicomData = null; // { width, height, pixels (Int16 HU), wcDefault, wwDefault, meta: {...} } — заполнено только для DICOM
+let wl = { width: 400, center: 40 }; // текущие настройки окна
 
 function redrawBase(ctx, w, h) {
   if (currentSample) generateMedicalImage(ctx, w, h, currentSample);
   else if (loadedImgEl) ctx.drawImage(loadedImgEl, 0, 0, w, h);
+  else if (dicomData) renderDicomToCanvas(ctx);
+}
+
+// ===== DICOM =====
+const EXPLICIT_VR_LENGTHS = { OB: 4, OW: 4, OF: 4, SQ: 4, UT: 4, UN: 4 };
+
+function readDicom(buffer) {
+  const bytes = new Uint8Array(buffer);
+  // Префикс «DICM» обязателен со смещения 128 (файловый мета-заголовок); некоторые файлы без него
+  let hasPart10 = bytes.length > 132 && bytes[128] === 0x44 && bytes[129] === 0x49 && bytes[130] === 0x43 && bytes[131] === 0x4D;
+  if (!hasPart10 && !(bytes[0] === 0x44 && bytes[1] === 0x49 && bytes[2] === 0x43 && bytes[3] === 0x4D)) {
+    // Разрешаем raw DICOM без префикса только если дальше есть правдоподобная группа элементов
+    if (!((bytes[0] === 0x02 && bytes[1] === 0x00) || (bytes[0] === 0x28 && bytes[1] === 0x00))) {
+      throw new Error('Это не DICOM-файл (нет префикса DICM)');
+    }
+  }
+  const view = new DataView(buffer);
+  let pos = hasPart10 ? 132 : 0;
+  let little = true; // мета-группа всегда little-endian
+  let explicitVR = true;
+  const tags = new Map();
+
+  // Сначала пропускаем мета-группу (0002,xxxx) и определяем TransferSyntaxUID
+  let transferSyntax = null;
+  while (pos + 8 <= bytes.length) {
+    const group = view.getUint16(pos, little);
+    if (group !== 0x0002) break;
+    pos = readElement(pos, little, true, (tag, vr, len, dataOff) => {
+      if (tag === '0002,0010') transferSyntax = new TextDecoder('ascii').decode(bytes.subarray(dataOff, dataOff + len)).trim();
+    });
+  }
+  if (transferSyntax) {
+    // Несжатые синтаксисы с прямым/неявным VR и малым порядком байт — читаем сами
+    if (transferSyntax === '1.2.840.10008.1.2.1') explicitVR = true;       // Explicit VR Little Endian (наиболее частый)
+    else if (transferSyntax === '1.2.840.10008.1.2') explicitVR = false;  // Implicit VR Little Endian
+    else if (transferSyntax === '1.2.840.10008.1.2.2') {
+      throw new Error('DICOM с большим порядком байт (Explicit VR Big Endian) не поддерживается');
+    } else if (/^1\.2\.840\.10008\.1\.2\.(4|5|6|7)/.test(transferSyntax)) {
+      throw new Error('Сжатые DICOM (JPEG/JPEG2000/RLE) не поддерживаются. Пересохраните снимок без сжатия (Explicit VR Little Endian).');
+    } else if (transferSyntax === '1.2.840.10008.1.2.1.99') {
+      throw new Error('Deflated DICOM не поддерживается. Пересохраните снимок без сжатия (Explicit VR Little Endian).');
+    }
+    // Прочие/неизвестные синтаксисы — пробуем читать как Explicit VR Little Endian
+  }
+
+  function readElement(pos, little, explicit, onData) {
+    if (pos + 8 > bytes.length) return bytes.length;
+    const group = view.getUint16(pos, little);
+    const elem = view.getUint16(pos + 2, little);
+    let vr = null, len, dataOff;
+    if (explicit) {
+      vr = String.fromCharCode(bytes[pos+4], bytes[pos+5]);
+      if (EXPLICIT_VR_LENGTHS[vr] === 4) { len = view.getUint32(pos + 8, little); dataOff = pos + 12; }
+      else { len = view.getUint16(pos + 6, little); dataOff = pos + 8; }
+    } else {
+      len = view.getUint32(pos + 4, little); dataOff = pos + 8;
+    }
+    if (len === 0xFFFFFFFF) throw new Error('Вложенные последовательности (SQ) в этом файле не поддерживаются');
+    const tag = group.toString(16).padStart(4, '0') + ',' + elem.toString(16).padStart(4, '0');
+    if (onData) onData(tag, vr, len, dataOff);
+    tags.set(tag, { vr, len, off: dataOff });
+    return dataOff + len;
+  }
+
+  while (pos + 8 <= bytes.length) {
+    const next = readElement(pos, little, explicitVR, null);
+    if (next <= pos) break;
+    pos = next;
+  }
+
+  const getStr = (tag) => { const t = tags.get(tag); if (!t) return null; return new TextDecoder('ascii').decode(bytes.subarray(t.off, t.off + t.len)).trim() || null; };
+  const getInt = (tag) => {
+    const t = tags.get(tag); if (!t || t.len < 2) return null;
+    if (t.vr === 'US') return view.getUint16(t.off, true); // бинарные US: Rows, Columns, Bits*, PixelRepresentation
+    if (t.vr === 'SS') return view.getInt16(t.off, true);
+    const s = getStr(tag); const v = s !== null ? parseInt(s, 10) : NaN; return isFinite(v) ? v : null;
+  };
+  const getFloat = (tag) => { const t = tags.get(tag); if (!t) return null; const s = getStr(tag); const v = s !== null ? parseFloat(s) : NaN; return isFinite(v) ? v : null; };
+
+  const width = getInt('0028,0011');
+  const height = getInt('0028,0010');
+  if (!width || !height) throw new Error('В DICOM-файле нет размеров изображения');
+  const bitsAllocated = getInt('0028,0100') || 16;
+  const pixelRepresentation = getInt('0028,0103') ?? 1;
+  const rescaleIntercept = getFloat('0028,1052') ?? 0;
+  const rescaleSlope = getFloat('0028,1053') ?? 1;
+  const wc = getFloat('0028,1050');
+  const ww = getFloat('0028,1051');
+
+  const pixelTag = tags.get('7fe0,0010');
+  if (!pixelTag) throw new Error('В DICOM-файле нет данных изображения (PixelData)');
+  const numPixels = width * height;
+  const pixels = new Int16Array(numPixels);
+  let min = Infinity, max = -Infinity;
+  const off0 = pixelTag.off;
+  for (let i = 0; i < numPixels; i++) {
+    let raw;
+    if (bitsAllocated === 8) raw = view.getUint8(off0 + i);
+    else if (pixelRepresentation === 1) raw = view.getInt16(off0 + i * 2, true);
+    else raw = view.getUint16(off0 + i * 2, true);
+    const hu = raw * rescaleSlope + rescaleIntercept;
+    pixels[i] = Math.max(-32000, Math.min(32000, hu));
+    if (hu < min) min = hu; if (hu > max) max = hu;
+  }
+
+  return {
+    width, height, pixels, huMin: Math.round(min), huMax: Math.round(max),
+    wcDefault: wc ?? 40, wwDefault: ww ?? 400,
+    meta: {
+      patient: getStr('0010,0010'),
+      studyDesc: getStr('0008,1030'),
+      seriesDesc: getStr('0008,103e'),
+      modality: getStr('0008,0060'),
+      date: getStr('0008,0020'),
+      manufacturer: getStr('0008,0070')
+    }
+  };
+}
+
+function applyWindowLevel(pixels, width, height, ww, wc, ctx) {
+  const lo = wc - ww / 2, hi = wc + ww / 2;
+  const range = Math.max(1, hi - lo);
+  const img = ctx.createImageData(width, height);
+  const d = img.data;
+  for (let i = 0; i < pixels.length; i++) {
+    let t = (pixels[i] - lo) / range;
+    t = Math.max(0, Math.min(1, t));
+    const v = Math.round(t * 255);
+    const o = i * 4;
+    d[o] = v; d[o+1] = v; d[o+2] = v;
+    d[o+3] = 255;
+  }
+  return img;
+}
+
+function renderDicomToCanvas(ctx) {
+  ctx.putImageData(applyWindowLevel(dicomData.pixels, dicomData.width, dicomData.height, wl.width, wl.center, ctx), 0, 0);
+  ctx.font = 'bold 12px Segoe UI'; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.textAlign = 'left';
+  ctx.fillText(`DICOM · W:${wl.width} L:${wl.center} HU`, 10, 20);
+}
+
+function showDicomMeta() {
+  const m = dicomData.meta;
+  const bits = [];
+  if (m.patient) bits.push('Пациент: <b>' + m.patient + '</b>');
+  if (m.studyDesc) bits.push('Исследование: <b>' + m.studyDesc + '</b>');
+  if (m.seriesDesc) bits.push('Серия: <b>' + m.seriesDesc + '</b>');
+  if (m.modality) bits.push('Модальность: <b>' + m.modality + '</b>');
+  if (m.date) bits.push('Дата: <b>' + m.date.replace(/(\\d{4})(\\d{2})(\\d{2})/, '$1-$2-$3') + '</b>');
+  if (m.manufacturer) bits.push('Производитель: <b>' + m.manufacturer + '</b>');
+  bits.push(`HU: <b>${dicomData.huMin} … ${dicomData.huMax}</b>`);
+  document.getElementById('dicom-meta').innerHTML = bits.join('<br>');
+}
+
+const WL_PRESETS = [
+  { name: 'Брюшная полость', ww: 400, wc: 40 },
+  { name: 'Мягкие ткани', ww: 350, wc: 50 },
+  { name: 'Лёгкие', ww: 1500, wc: -600 },
+  { name: 'Кости', ww: 2000, wc: 300 },
+  { name: 'Поджелудочная', ww: 250, wc: 60 },
+  { name: 'Печень', ww: 200, wc: 60 },
+  { name: 'Мозг', ww: 80, wc: 40 },
+];
+
+function buildWlPanel() {
+  const presetsRow = document.getElementById('wl-presets');
+  presetsRow.innerHTML = '';
+  WL_PRESETS.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'wl-preset-btn';
+    btn.textContent = p.name;
+    btn.onclick = () => setWl(p.ww, p.wc);
+    presetsRow.appendChild(btn);
+  });
+  const w = document.getElementById('wl-width'), c = document.getElementById('wl-center');
+  w.addEventListener('input', () => { wl.width = +w.value; updateWlLabels(); if (dicomData) redrawDicomView(); });
+  c.addEventListener('input', () => { wl.center = +c.value; updateWlLabels(); if (dicomData) redrawDicomView(); });
+}
+
+function updateWlLabels() {
+  document.getElementById('wl-width-val').textContent = wl.width + ' HU';
+  document.getElementById('wl-center-val').textContent = wl.center + ' HU';
+  const w = document.getElementById('wl-width'), c = document.getElementById('wl-center');
+  w.value = wl.width; c.value = wl.center;
+}
+
+function setWl(ww, wc) { wl.width = Math.round(ww); wl.center = Math.round(wc); updateWlLabels(); if (dicomData) redrawDicomView(); }
+
+function redrawDicomView() {
+  const wrap = document.getElementById('canvas-wrap');
+  const canvas = wrap.querySelector('canvas');
+  if (!canvas || !dicomData) return;
+  const ctx = canvas.getContext('2d');
+  renderDicomToCanvas(ctx);
+  // Поверх — точки и текущий вид
+  if (lastResult && (currentView === 'seg' || currentView === 'overlay')) drawSegmentation(lastResult.dice);
+  else if (currentView === 'heatmap') drawHeatmap();
+  else if (currentView === 'seg') drawPointsOnCanvas();
+}
+
+function loadDicomFile(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      dicomData = readDicom(ev.target.result);
+    } catch (err) {
+      showToast('Ошибка DICOM: ' + err.message);
+      return;
+    }
+    currentImage = null; currentSample = null; loadedImgEl = null;
+    promptPoints = []; maskShapes = new Map(); lastResult = null;
+    document.getElementById('export-row').style.display = 'none';
+    wl = { width: dicomData.wwDefault, center: dicomData.wcDefault };
+    updateWlLabels();
+    showDicomMeta();
+    document.getElementById('wl-patient').textContent = dicomData.meta.patient ? dicomData.meta.patient : '';
+    document.getElementById('wl-panel').classList.add('visible');
+    const wrap = document.getElementById('canvas-wrap');
+    wrap.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    const maxW = 600, maxH = 500;
+    let w = dicomData.width, h = dicomData.height;
+    if (w > maxW) { h = h * maxW / w; w = maxW; }
+    if (h > maxH) { w = w * maxH / h; h = maxH; }
+    canvas.width = w; canvas.height = h;
+    canvasRef = canvas;
+    wrap.appendChild(canvas);
+    renderDicomToCanvas(canvas.getContext('2d'));
+    showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · настройте окно W/L');
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function plural(n, one, few, many) {
@@ -317,13 +582,15 @@ function plural(n, one, few, many) {
   return many;
 }
 
+buildWlPanel();
+
 // Build samples
 const samplesRow = document.getElementById('samples-row');
 SAMPLES.forEach(s => {
   const btn = document.createElement('button');
   btn.className = 'sample-btn';
   btn.textContent = `${s.icon} ${s.name}`;
-  btn.onclick = () => { currentSample = s; currentImage = null; loadedImgEl = null; promptPoints = []; lastResult = null; maskShapes = new Map(); document.getElementById('export-row').style.display = 'none'; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
+  btn.onclick = () => { resetForNewImage(); currentSample = s; currentImage = null; loadedImgEl = null; drawSyntheticImage(s); showToast(`${s.name} загружен — кликните для точек промпта`); };
   samplesRow.appendChild(btn);
 });
 
@@ -342,14 +609,24 @@ MODES.forEach((m, i) => {
 });
 
 // File upload
+function isDicomFile(file) {
+  return (file.name && file.name.toLowerCase().endsWith('.dcm')) || file.type === 'application/dicom';
+}
+function resetForNewImage() {
+  promptPoints = []; maskShapes = new Map(); lastResult = null; dicomData = null;
+  document.getElementById('export-row').style.display = 'none';
+  document.getElementById('wl-panel').classList.remove('visible');
+}
 document.getElementById('file-input').addEventListener('change', e => {
   const file = e.target.files[0];
-  if (file) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; maskShapes = new Map(); lastResult = null; document.getElementById('export-row').style.display = 'none'; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }
+  if (!file) return;
+  if (isDicomFile(file)) { resetForNewImage(); loadDicomFile(file); return; }
+  const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file);
 });
 const zone = document.getElementById('upload-zone');
 zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
 zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (file && file.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; promptPoints = []; maskShapes = new Map(); lastResult = null; document.getElementById('export-row').style.display = 'none'; loadRealImage(ev.target.result); }; reader.readAsDataURL(file); }});
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (!file) return; if (isDicomFile(file) || !file.type.startsWith('image/')) { if (isDicomFile(file)) { resetForNewImage(); loadDicomFile(file); } else { showToast('Поддерживаются изображения и DICOM-файлы (.dcm).'); } return; } const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file); });
 
 function loadRealImage(src) {
   const wrap = document.getElementById('canvas-wrap');
@@ -494,6 +771,51 @@ function drawPointsOnCanvas() {
   });
 }
 
+// ===== ПАНЕЛИ РЕЗУЛЬТАТА (общие для сегментации и импорта отчёта) =====
+function renderMetrics(result) {
+  const m = result.metrics || result;
+  document.getElementById('metrics-grid').innerHTML = [
+    { val: (+m.dice).toFixed(3), lbl: 'Dice Score', color: m.dice>0.85?'#10b981':m.dice>0.7?'#f59e0b':'#ef4444' },
+    { val: (+m.iou).toFixed(3), lbl: 'IoU Score', color: m.iou>0.75?'#10b981':'#f59e0b' },
+    { val: Math.round(m.latency_ms ?? m.latency) + 'мс', lbl: 'Задержка', color: '#8b5cf6' },
+    { val: Math.round(m.mask_area_px ?? m.area) + 'пкс²', lbl: 'Площадь маски', color: '#06b6d4' },
+  ].map(x => `<div class="metric"><div class="metric-val" style="color:${x.color}">${x.val}</div><div class="metric-lbl">${x.lbl}</div></div>`).join('');
+}
+
+function renderOrgans(organs) {
+  const entries = Object.entries(organs || {});
+  document.getElementById('organ-panel').innerHTML = entries.length ? entries.map(([org, score]) => {
+    const color = score>0.85?'#10b981':score>0.75?'#06b6d4':'#f59e0b';
+    return `<div class="gauge-wrap"><div class="gauge-label">${org}</div><div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round(score*100)}%;background:${color}"></div></div><div class="gauge-val" style="color:${color}">${(+score).toFixed(2)}</div></div>`;
+  }).join('') : '<div class="empty-state"><div class="empty-icon">🩻</div>В отчёте нет оценок по органам</div>';
+}
+
+function renderHistory() {
+  document.getElementById('history-panel').innerHTML = segHistory.length ? segHistory.slice(0,6).map(h => `
+    <div class="hist-item">
+      <div>${h.icon} ${h.name}</div>
+      <div style="color:var(--muted2);font-size:0.7rem;margin-top:2px;display:flex;gap:8px;">
+        <span style="color:${h.dice>0.85?'#10b981':'#f59e0b'}">${h.dice.toFixed(3)} Dice</span>
+        <span>${h.points} точек</span>
+        <span>${h.time}</span>
+      </div>
+    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">📋</div>Сегментаций пока нет</div>';
+}
+
+function setActiveMode(modeId) {
+  const btns = document.querySelectorAll('.mode-row .mode-btn');
+  MODES.forEach((m, i) => { if (btns[i]) btns[i].classList.toggle('active', m.id === modeId); });
+  selectedMode = modeId;
+}
+
+function setActiveViewTab(view) {
+  const tabs = document.querySelectorAll('#view-tabs .mode-btn');
+  const order = ['seg', 'heatmap', 'overlay', 'original'];
+  const idx = order.indexOf(view);
+  tabs.forEach((b, i) => b.classList.toggle('active', i === idx));
+  currentView = view;
+}
+
 function renderPointsList() {
   const el = document.getElementById('points-list');
   if (!promptPoints.length) { el.innerHTML = '<div class="empty-state"><div class="empty-icon">📍</div>Кликните на изображение для добавления точек промпта</div>'; return; }
@@ -560,41 +882,23 @@ async function runSegmentation() {
     });
   });
 
-  lastResult = { dice, iou, latency, area, mode: selectedMode, shapes: maskShapes, organs, timestamp: new Date().toISOString() };
+  lastResult = { dice, iou, latency, area, mode: selectedMode, shapes: maskShapes, organs, timestamp: new Date().toISOString(), wl: { width: wl.width, center: wl.center } };
   document.getElementById('export-row').style.display = 'flex';
 
   // Draw segmentation
   drawSegmentation(dice);
 
-  // Metrics
-  document.getElementById('metrics-grid').innerHTML = [
-    { val: dice.toFixed(3), lbl: 'Dice Score', color: dice>0.85?'#10b981':dice>0.7?'#f59e0b':'#ef4444' },
-    { val: iou.toFixed(3), lbl: 'IoU Score', color: iou>0.75?'#10b981':'#f59e0b' },
-    { val: latency+'мс', lbl: 'Задержка', color: '#8b5cf6' },
-    { val: area+'пкс²', lbl: 'Площадь маски', color: '#06b6d4' },
-  ].map(m => `<div class="metric"><div class="metric-val" style="color:${m.color}">${m.val}</div><div class="metric-lbl">${m.lbl}</div></div>`).join('');
+  renderMetrics(lastResult);
 
   // Organ scores
   const sample = currentSample || { organs: ['Область А','Область Б','Область В','Область Г','Область Д'] };
-  document.getElementById('organ-panel').innerHTML = sample.organs.map(org => {
-    const score = 0.72 + Math.random()*0.22;
-    organs[org] = +score.toFixed(3);
-    const color = score>0.85?'#10b981':score>0.75?'#06b6d4':'#f59e0b';
-    return `<div class="gauge-wrap"><div class="gauge-label">${org}</div><div class="gauge-bar"><div class="gauge-fill" style="width:${Math.round(score*100)}%;background:${color}"></div></div><div class="gauge-val" style="color:${color}">${score.toFixed(2)}</div></div>`;
-  }).join('');
+  sample.organs.forEach(org => { organs[org] = +(0.72 + Math.random()*0.22).toFixed(3); });
+  renderOrgans(organs);
 
   // History
   const sample2 = currentSample || { name: 'Загруженное изображение', icon: '🖼️' };
   segHistory.unshift({ name: sample2.name, icon: sample2.icon, dice, points: promptPoints.length, time: new Date().toLocaleTimeString() });
-  document.getElementById('history-panel').innerHTML = segHistory.slice(0,6).map(h => `
-    <div class="hist-item">
-      <div>${h.icon} ${h.name}</div>
-      <div style="color:var(--muted2);font-size:0.7rem;margin-top:2px;display:flex;gap:8px;">
-        <span style="color:${h.dice>0.85?'#10b981':'#f59e0b'}">${h.dice.toFixed(3)} Dice</span>
-        <span>${h.points} точек</span>
-        <span>${h.time}</span>
-      </div>
-    </div>`).join('');
+  renderHistory();
 
   btn.disabled = false;
 }
@@ -656,7 +960,7 @@ function setView(view, btn) {
   document.querySelectorAll('#view-tabs .mode-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   if (!canvasRef) return;
-  if (view === 'original') { if (currentSample) drawSyntheticImage(currentSample); else if (currentImage) loadRealImage(currentImage); }
+  if (view === 'original') { if (currentSample) drawSyntheticImage(currentSample); else if (currentImage) loadRealImage(currentImage); else redrawBase(canvasRef.getContext('2d'), canvasRef.width, canvasRef.height); }
   else if (view === 'seg' && lastResult) drawSegmentation(lastResult.dice);
   else if (view === 'heatmap') drawHeatmap();
   else if (view === 'overlay') drawOverlay();
@@ -757,10 +1061,11 @@ function buildReport() {
   });
   return {
     app: 'PancreasView',
-    version: '1.1.0',
+    version: '1.2.0',
     created_at: lastResult.timestamp,
     mode: modeLabel,
-    image_source: currentSample ? currentSample.name : 'загруженное изображение',
+    image_source: currentSample ? currentSample.name : (dicomData ? 'DICOM' + (dicomData.meta.studyDesc ? ' · ' + dicomData.meta.studyDesc : '') : 'загруженное изображение'),
+    window_level: dicomData ? { width: lastResult.wl.width, center: lastResult.wl.center, hu_range: [dicomData.huMin, dicomData.huMax] } : null,
     metrics: {
       dice: +lastResult.dice.toFixed(3),
       iou: +lastResult.iou.toFixed(3),
@@ -790,6 +1095,7 @@ function exportReport(format) {
       ['created_at', report.created_at].join(','),
       ['mode', report.mode].join(','),
       ['image_source', report.image_source].join(','),
+      ...(report.window_level ? [ ['wl_width_hu', report.window_level.width].join(','), ['wl_center_hu', report.window_level.center].join(','), ['hu_range', report.window_level.hu_range.join(' … ')].join(',') ] : []),
       ['dice', report.metrics.dice].join(','),
       ['iou', report.metrics.iou].join(','),
       ['latency_ms', report.metrics.latency_ms].join(','),
@@ -806,6 +1112,115 @@ function exportReport(format) {
     showToast('Отчёт CSV сохранён.');
   }
 }
+
+// ===== ИМПОРТ ОТЧЁТА (восстановление сессии) =====
+function validateReport(report) {
+  if (!report || typeof report !== 'object') return 'JSON не содержит объект отчёта';
+  if (report.app !== 'PancreasView') return 'Это не отчёт PancreasView';
+  if (!report.metrics || typeof report.metrics !== 'object') return 'В отчёте нет блока metrics';
+  if (!Array.isArray(report.mask_shapes)) return 'В отчёте нет данных масок (mask_shapes)';
+  return null;
+}
+
+function applyReportToCanvas(report) {
+  const size = report.metrics.canvas_size;
+  const usable = canvasRef && document.getElementById('canvas-wrap').contains(canvasRef);
+  const sameSize = usable && Array.isArray(size) && size.length === 2 && canvasRef.width === size[0] && canvasRef.height === size[1];
+  if (sameSize) {
+    // Холст совпадает с тем, на котором делался отчёт: восстанавливаем поверх текущего изображения
+    if (dicomData && report.window_level) {
+      wl.width = report.window_level.width;
+      wl.center = report.window_level.center;
+      updateWlLabels();
+    }
+    return { placed: true, exact: true };
+  }
+  // Иначе создаём нейтральный холст отчётного размера: само изображение в отчёт не входит
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  canvas.width = (Array.isArray(size) && size[0]) || (usable ? canvasRef.width : 500);
+  canvas.height = (Array.isArray(size) && size[1]) || (usable ? canvasRef.height : 420);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0a0e18';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  ctx.font = '12px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('Исходное изображение недоступно — восстановлены маски, точки и метрики из отчёта', canvas.width/2, canvas.height - 14);
+  currentSample = null; currentImage = null; loadedImgEl = null; dicomData = null;
+  document.getElementById('wl-panel').classList.remove('visible');
+  canvasRef = canvas;
+  wrap.appendChild(canvas);
+  return { placed: true, exact: false };
+}
+
+function importReport(report) {
+  const error = validateReport(report);
+  if (error) { showToast('Отчёт не принят: ' + error); return false; }
+
+  // Точки промпта
+  promptPoints = (report.prompt_points || []).map((p, i) => ({
+    x: Math.round(p.x), y: Math.round(p.y),
+    color: p.color || ['#8b5cf6','#06b6d4','#10b981','#f59e0b','#ec4899'][i % 5]
+  }));
+
+  // Геометрия масок: угол в отчёте в градусах, внутри — радианы
+  maskShapes = new Map();
+  report.mask_shapes.forEach(sh => {
+    const pt = sh.point || [];
+    if (pt.length !== 2) return;
+    maskShapes.set(pt[0] + ',' + pt[1], { rx: sh.rx, ry: sh.ry, angle: (sh.angle_deg || 0) * Math.PI / 180 });
+  });
+
+  const m = report.metrics;
+  const modeObj = MODES.find(x => x.label === report.mode) || MODES.find(x => x.id === report.mode);
+  const placement = applyReportToCanvas(report);
+
+  lastResult = {
+    dice: +m.dice, iou: +m.iou, latency: m.latency_ms, area: m.mask_area_px,
+    mode: modeObj ? modeObj.id : selectedMode,
+    shapes: maskShapes,
+    organs: report.organ_scores || {},
+    timestamp: report.created_at || new Date().toISOString(),
+    wl: report.window_level ? { width: report.window_level.width, center: report.window_level.center } : { width: wl.width, center: wl.center },
+    restored: true
+  };
+
+  if (modeObj) setActiveMode(modeObj.id);
+  setActiveViewTab('seg');
+  document.getElementById('export-row').style.display = 'flex';
+  renderMetrics(lastResult);
+  renderOrgans(lastResult.organs);
+  renderPointsList();
+  drawSegmentation(lastResult.dice);
+
+  const source = report.image_source || 'отчёт';
+  segHistory.unshift({ name: source, icon: '📥', dice: lastResult.dice, points: promptPoints.length, time: new Date().toLocaleTimeString() });
+  renderHistory();
+
+  showToast(placement.exact
+    ? `Сессия восстановлена на текущем снимке · Dice ${lastResult.dice.toFixed(3)} · ${promptPoints.length} ${plural(promptPoints.length, 'точка', 'точки', 'точек')}`
+    : `Маски и метрики восстановлены · Dice ${lastResult.dice.toFixed(3)} · ${promptPoints.length} ${plural(promptPoints.length, 'точка', 'точки', 'точек')} (без исходного снимка)`);
+  return true;
+}
+
+function importReportFile(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    let report;
+    try { report = JSON.parse(ev.target.result); }
+    catch (err) { showToast('Не удалось прочитать JSON: ' + err.message); return; }
+    importReport(report);
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById('report-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) importReportFile(file);
+  e.target.value = ''; // чтобы тот же файл можно было выбрать повторно
+});
 
 function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
 </script>
