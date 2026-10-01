@@ -58,6 +58,12 @@ header {
 .roi-item-vals b { color: var(--accent2); font-weight: 600; }
 .roi-del { background: none; border: 1px solid var(--border); color: var(--muted2); border-radius: 6px; cursor: pointer; padding: 0 6px; font-size: 0.7rem; font-family: inherit; }
 .roi-del:hover { color: #f87171; border-color: #f87171; }
+.series-nav { display: flex; align-items: center; gap: 10px; margin-top: 0.75rem; }
+.series-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--muted2); width: 34px; height: 28px; border-radius: 8px; cursor: pointer; font-size: 0.75rem; font-family: inherit; transition: all 0.2s; flex-shrink: 0; }
+.series-btn:hover:not(:disabled) { color: #c4b5fd; border-color: var(--accent); }
+.series-btn:disabled { opacity: 0.35; cursor: default; }
+.series-nav input[type=range] { flex: 1; min-width: 0; }
+.series-label { font-size: 0.72rem; color: var(--muted2); min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
 .canvas-wrap.is-panning { cursor: move !important; }
 .canvas-wrap canvas { max-width: 100%; display: block; transform-origin: center center; }
 .wl-panel .wl-help { font-size: 0.68rem; color: var(--muted2); margin-top: 0.5rem; line-height: 1.5; }
@@ -189,10 +195,10 @@ header {
       <div class="panel-hdr"><div class="dot"></div> Загрузка изображения</div>
       <div class="panel-body">
         <div class="upload-zone" id="upload-zone">
-          <input type="file" class="upload-input" id="file-input" accept="image/*,.dcm">
+          <input type="file" class="upload-input" id="file-input" accept="image/*,.dcm" multiple>
           <div class="upload-icon">🩻</div>
           <div class="upload-title">Перетащите КТ-снимок или кликните для загрузки</div>
-          <div class="upload-sub">КТ брюшной полости · PNG, JPG, DICOM (.dcm) · Любой реальный медицинский снимок</div>
+          <div class="upload-sub">КТ брюшной полости · PNG, JPG, DICOM (.dcm) · Можно выбрать или перетащить несколько снимков .dcm одной серией</div>
         </div>
 
         <div style="margin-top:0.75rem;">
@@ -221,7 +227,7 @@ header {
             <span class="wl-val" id="wl-center-val">40 HU</span>
           </div>
           <div class="wl-presets" id="wl-presets"></div>
-          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина; <b>Ctrl+колесо</b> — зум к курсору, <b>средняя кнопка</b> — панорама, <b>двойной клик</b> — сброс вида. Обычный клик ставит точку промпта. В режиме <b>ROI-замеры</b> протягивайте эллипс — получите диаметр и площадь в мм (из PixelSpacing) и среднее HU внутри области.</div>
+          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина; <b>Ctrl+колесо</b> — зум к курсору, <b>средняя кнопка</b> — панорама, <b>двойной клик</b> — сброс вида. Обычный клик ставит точку промпта. В режиме <b>ROI-замеры</b> протягивайте эллипс — получите диаметр и площадь в мм (из PixelSpacing) и среднее HU внутри области. Загрузите несколько файлов .dcm одной серией — <b>слайдер</b> и клавиши <b>←/→</b> переключают снимки.</div>
           <div class="dicom-meta" id="dicom-meta"></div>
         </div>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
@@ -264,6 +270,12 @@ header {
             <div class="canvas-placeholder-icon">🩻</div>
             Загрузите изображение или выберите образец, затем кликните для установки точек промпта
           </div>
+        </div>
+        <div class="series-nav" id="series-nav" style="display:none;">
+          <button class="series-btn" id="series-prev" onclick="showPrevSlice()" title="Предыдущий снимок (←)">◀</button>
+          <input type="range" id="series-slider" min="1" max="1" value="1" oninput="showSlice(+this.value - 1)">
+          <button class="series-btn" id="series-next" onclick="showNextSlice()" title="Следующий снимок (→)">▶</button>
+          <span class="series-label" id="series-label">1 / 1</span>
         </div>
       </div>
     </div>
@@ -496,7 +508,9 @@ function readDicom(buffer) {
       seriesDesc: getStr('0008,103e'),
       modality: getStr('0008,0060'),
       date: getStr('0008,0020'),
-      manufacturer: getStr('0008,0070')
+      manufacturer: getStr('0008,0070'),
+      seriesUID: getStr('0020,000e'),
+      instanceNumber: (() => { const v = parseInt(getStr('0020,0013') || '', 10); return isFinite(v) ? v : null; })(),
     }
   };
 }
@@ -533,6 +547,7 @@ function showDicomMeta() {
   if (m.date) bits.push('Дата: <b>' + m.date.replace(/(\\d{4})(\\d{2})(\\d{2})/, '$1-$2-$3') + '</b>');
   if (m.manufacturer) bits.push('Производитель: <b>' + m.manufacturer + '</b>');
   if (dicomData.pixelSpacing) bits.push(`Воксель: <b>${dicomData.pixelSpacing.col}×${dicomData.pixelSpacing.row} мм</b>`);
+  if (dicomSeries.length > 1) bits.push(`Снимок: <b>${seriesIndex + 1} / ${dicomSeries.length}</b>${dicomData.meta.instanceNumber != null ? ` · Instance ${dicomData.meta.instanceNumber}` : ''}`);
   bits.push(`HU: <b>${dicomData.huMin} … ${dicomData.huMax}</b>`);
   document.getElementById('dicom-meta').innerHTML = bits.join('<br>');
 }
@@ -992,40 +1007,151 @@ function redrawDicomView() {
   else if (currentView === 'seg') drawPointsOnCanvas();
 }
 
-function loadDicomFile(file) {
-  const reader = new FileReader();
-  reader.onload = ev => {
-    try {
-      dicomData = readDicom(ev.target.result);
-    } catch (err) {
-      showToast('Ошибка DICOM: ' + err.message);
+// ===== DICOM-СЕРИЯ: навигация по слайдеру и стрелкам =====
+// dicomSeries — снимки одной серии, отсортированные по InstanceNumber;
+// showSlice() переключает dicomData, сохраняя зум/панораму, окно W/L, точки и ROI.
+let dicomSeries = [];
+let seriesIndex = 0;
+
+function loadDicomSeries(files) {
+  Promise.all(files.map(f => new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = ev => resolve(ev.target.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsArrayBuffer(f);
+  }))).then(buffers => {
+    const slices = [];
+    let failed = 0;
+    for (const buf of buffers) {
+      if (!buf) { failed++; continue; }
+      try { slices.push(readDicom(buf)); } catch (err) { failed++; }
+    }
+    if (!slices.length) {
+      showToast('Не удалось разобрать ни один DICOM-файл' + (failed ? ` (не прочитано: ${failed} из ${files.length})` : '') + '.');
       return;
     }
-    currentImage = null; currentSample = null; loadedImgEl = null;
-    promptPoints = []; maskShapes = new Map(); lastResult = null;
-    document.getElementById('export-row').style.display = 'none';
-    wl = { width: dicomData.wwDefault, center: dicomData.wcDefault };
-    updateWlLabels();
-    showDicomMeta();
-    document.getElementById('wl-patient').textContent = dicomData.meta.patient ? dicomData.meta.patient : '';
-    document.getElementById('wl-panel').classList.add('visible');
-    const wrap = document.getElementById('canvas-wrap');
-    replaceCanvas(wrap);
-    const canvas = document.createElement('canvas');
-    const maxW = 600, maxH = 500;
-    let w = dicomData.width, h = dicomData.height;
-    if (w > maxW) { h = h * maxW / w; w = maxW; }
-    if (h > maxH) { w = w * maxH / h; h = maxH; }
+    // Выделение серии: группируем по SeriesInstanceUID, показываем крупнейшую группу
+    let note = '';
+    if (failed > 0) note += ` · не прочитано файлов: ${failed}`;
+    const groups = new Map();
+    for (const s of slices) {
+      const key = s.meta.seriesUID || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    }
+    if (groups.size > 1) {
+      let best = [];
+      for (const g of groups.values()) if (g.length > best.length) best = g;
+      note = ` · найдено серий: ${groups.size}, показана крупнейшая (${best.length})` + note;
+      slices.length = 0;
+      slices.push(...best);
+    }
+    // Сортировка по InstanceNumber; снимки без номера — в конец в порядке загрузки (sort стабилен)
+    slices.sort((a, b) => {
+      const ia = a.meta.instanceNumber, ib = b.meta.instanceNumber;
+      if (ia == null && ib == null) return 0;
+      if (ia == null) return 1;
+      if (ib == null) return -1;
+      return ia - ib;
+    });
+    dicomSeries = slices;
+    seriesIndex = 0;
+    initDicomView(note);
+  });
+}
+
+function initDicomView(note) {
+  note = note || '';
+  dicomData = dicomSeries[0];
+  seriesIndex = 0;
+  currentImage = null; currentSample = null; loadedImgEl = null;
+  promptPoints = []; maskShapes = new Map(); lastResult = null;
+  document.getElementById('export-row').style.display = 'none';
+  wl = { width: dicomData.wwDefault, center: dicomData.wcDefault };
+  updateWlLabels();
+  showDicomMeta();
+  document.getElementById('wl-patient').textContent = dicomData.meta.patient ? dicomData.meta.patient : '';
+  document.getElementById('wl-panel').classList.add('visible');
+  const wrap = document.getElementById('canvas-wrap');
+  replaceCanvas(wrap);
+  const canvas = document.createElement('canvas');
+  const maxW = 600, maxH = 500;
+  let w = dicomData.width, h = dicomData.height;
+  if (w > maxW) { h = h * maxW / w; w = maxW; }
+  if (h > maxH) { w = w * maxH / h; h = maxH; }
   canvas.width = w; canvas.height = h;
   canvasRef = canvas;
   wrap.appendChild(canvas);
   zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
   renderDicomToCanvas(canvas.getContext('2d'));
   drawRoiOverlay();
-    showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · тяните мышью по снимку для окна W/L');
-  };
-  reader.readAsArrayBuffer(file);
+  updateSeriesNav();
+  if (dicomSeries.length > 1) {
+    showToast(`DICOM-серия: ${dicomSeries.length} снимков · ${dicomData.width}×${dicomData.height} · ←/→ или слайдер${note}`);
+  } else {
+    showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · тяните мышью по снимку для окна W/L' + note);
+  }
 }
+
+function showSlice(i) {
+  if (!dicomSeries.length) return;
+  i = Math.max(0, Math.min(dicomSeries.length - 1, Math.round(i)));
+  const sliceChanged = dicomData !== dicomSeries[i];
+  dicomData = dicomSeries[i];
+  seriesIndex = i;
+  if (sliceChanged && lastResult) {
+    // Маска и метрики получены на другом снимке — убираем; точки промпта и ROI оставляем (геометрия общая для серии)
+    lastResult = null; maskShapes = new Map();
+    document.getElementById('export-row').style.display = 'none';
+  }
+  showDicomMeta();
+  // Холст пересоздаём только если размер матрицы нового снимка отличается
+  const wrap = document.getElementById('canvas-wrap');
+  const maxW = 600, maxH = 500;
+  let w = dicomData.width, h = dicomData.height;
+  if (w > maxW) { h = h * maxW / w; w = maxW; }
+  if (h > maxH) { w = w * maxH / h; h = maxH; }
+  const needNew = !canvasRef || !wrap.contains(canvasRef) || canvasRef.width !== (w | 0) || canvasRef.height !== (h | 0);
+  if (needNew) {
+    replaceCanvas(wrap);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvasRef = canvas;
+    wrap.appendChild(canvas);
+  }
+  applyViewTransform(); // зум/панорама сохраняются между снимками, оверлей ROI перепозиционируется
+  redrawDicomView();
+  drawRoiOverlay();
+  updateSeriesNav();
+}
+
+function showPrevSlice() { showSlice(seriesIndex - 1); }
+function showNextSlice() { showSlice(seriesIndex + 1); }
+
+function updateSeriesNav() {
+  const nav = document.getElementById('series-nav');
+  if (!nav) return;
+  const n = dicomSeries.length;
+  if (n < 2 || !dicomData) { nav.style.display = 'none'; return; }
+  nav.style.display = 'flex';
+  const slider = document.getElementById('series-slider');
+  slider.max = String(n);
+  slider.value = String(seriesIndex + 1);
+  document.getElementById('series-label').textContent = `${seriesIndex + 1} / ${n}`;
+  document.getElementById('series-prev').disabled = seriesIndex <= 0;
+  document.getElementById('series-next').disabled = seriesIndex >= n - 1;
+}
+
+// Клавиши ←/→ (и PageUp/PageDown, Home/End) листают серию, когда фокус не в поле ввода
+document.addEventListener('keydown', e => {
+  if (dicomSeries.length < 2) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); showSlice(seriesIndex - 1); }
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); showSlice(seriesIndex + 1); }
+  else if (e.key === 'Home') { e.preventDefault(); showSlice(0); }
+  else if (e.key === 'End') { e.preventDefault(); showSlice(dicomSeries.length - 1); }
+});
 
 function plural(n, one, few, many) {
   const mod10 = n % 10, mod100 = n % 100;
@@ -1073,18 +1199,21 @@ function resetForNewImage() {
   document.getElementById('wl-panel').classList.remove('visible');
   hideHuReadout();
   rois = []; roiDrag = null; renderRoiList(); drawRoiOverlay();
+  dicomSeries = []; seriesIndex = 0; updateSeriesNav();
   zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
 }
 document.getElementById('file-input').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (isDicomFile(file)) { resetForNewImage(); loadDicomFile(file); return; }
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  const dcms = files.filter(isDicomFile);
+  if (dcms.length) { resetForNewImage(); loadDicomSeries(dcms); return; }
+  const file = files[0];
   const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file);
 });
 const zone = document.getElementById('upload-zone');
 zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
 zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const file = e.dataTransfer.files[0]; if (!file) return; if (isDicomFile(file) || !file.type.startsWith('image/')) { if (isDicomFile(file)) { resetForNewImage(); loadDicomFile(file); } else { showToast('Поддерживаются изображения и DICOM-файлы (.dcm).'); } return; } const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file); });
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); const files = Array.from(e.dataTransfer.files || []); if (!files.length) return; const dcms = files.filter(isDicomFile); if (dcms.length) { resetForNewImage(); loadDicomSeries(dcms); return; } const file = files[0]; if (!file.type.startsWith('image/')) { showToast('Поддерживаются изображения и DICOM-файлы (.dcm).'); return; } const reader = new FileReader(); reader.onload = ev => { currentImage = ev.target.result; currentSample = null; loadedImgEl = null; resetForNewImage(); loadRealImage(ev.target.result); }; reader.readAsDataURL(file); });
 
 // Заменяет холст в canvas-wrap, сохраняя постоянные элементы (плашка HU)
 function replaceCanvas(wrap) {
@@ -1616,6 +1745,7 @@ function applyReportToCanvas(report) {
   ctx.textAlign = 'center';
   ctx.fillText('Исходное изображение недоступно — восстановлены маски, точки и метрики из отчёта', canvas.width/2, canvas.height - 14);
   currentSample = null; currentImage = null; loadedImgEl = null; dicomData = null;
+  dicomSeries = []; seriesIndex = 0; updateSeriesNav(); // серия принадлежала прежнему контексту
   document.getElementById('wl-panel').classList.remove('visible');
   canvasRef = canvas;
   wrap.appendChild(canvas);
