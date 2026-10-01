@@ -49,6 +49,15 @@ header {
 .hu-readout { position: absolute; display: none; pointer-events: none; background: rgba(10,14,24,0.88); border: 1px solid rgba(103,232,249,0.35); color: #67e8f9; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; z-index: 10; white-space: nowrap; }
 .zoom-badge { position: absolute; top: 10px; right: 10px; display: none; align-items: center; gap: 6px; background: rgba(10,14,24,0.88); border: 1px solid rgba(139,92,246,0.35); color: #c4b5fd; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; z-index: 10; cursor: pointer; user-select: none; }
 .zoom-badge:hover { color: #e9d5ff; border-color: var(--accent); }
+.roi-overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
+.canvas-wrap.roi-active canvas { cursor: crosshair; }
+.roi-list { display: flex; flex-direction: column; gap: 6px; }
+.roi-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 0.75rem; }
+.roi-item-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; }
+.roi-item-vals { margin-top: 3px; color: var(--muted2); font-size: 0.72rem; line-height: 1.45; }
+.roi-item-vals b { color: var(--accent2); font-weight: 600; }
+.roi-del { background: none; border: 1px solid var(--border); color: var(--muted2); border-radius: 6px; cursor: pointer; padding: 0 6px; font-size: 0.7rem; font-family: inherit; }
+.roi-del:hover { color: #f87171; border-color: #f87171; }
 .canvas-wrap.is-panning { cursor: move !important; }
 .canvas-wrap canvas { max-width: 100%; display: block; transform-origin: center center; }
 .wl-panel .wl-help { font-size: 0.68rem; color: var(--muted2); margin-top: 0.5rem; line-height: 1.5; }
@@ -212,7 +221,7 @@ header {
             <span class="wl-val" id="wl-center-val">40 HU</span>
           </div>
           <div class="wl-presets" id="wl-presets"></div>
-          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина; <b>Ctrl+колесо</b> — зум к курсору, <b>средняя кнопка</b> — панорама, <b>двойной клик</b> — сброс вида. Обычный клик ставит точку промпта.</div>
+          <div class="wl-help">💡 На снимке: <b>тяните мышью</b> — по горизонтали ширина окна (W), по вертикали уровень (L); <b>колесо</b> — уровень, <b>Shift+колесо</b> — ширина; <b>Ctrl+колесо</b> — зум к курсору, <b>средняя кнопка</b> — панорама, <b>двойной клик</b> — сброс вида. Обычный клик ставит точку промпта. В режиме <b>ROI-замеры</b> протягивайте эллипс — получите диаметр и площадь в мм (из PixelSpacing) и среднее HU внутри области.</div>
           <div class="dicom-meta" id="dicom-meta"></div>
         </div>
         <button class="clear-btn" onclick="clearPoints()">Очистить точки промпта</button>
@@ -241,6 +250,10 @@ header {
           <button class="mode-btn" onclick="setView('heatmap', this)">Тепловая карта внимания</button>
           <button class="mode-btn" onclick="setView('overlay', this)">Наложение</button>
           <button class="mode-btn" onclick="setView('original', this)">Оригинал</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:0.75rem;align-items:center;flex-wrap:wrap;">
+          <button class="mode-btn" id="roi-btn" onclick="toggleRoiMode()">📐 ROI-замеры</button>
+          <span style="font-size:0.7rem;color:var(--muted2);">протяните эллипс по снимку для замера Ø в мм и среднего HU</span>
         </div>
         <div class="canvas-wrap" id="canvas-wrap">
           <div class="hu-readout" id="hu-readout"></div>
@@ -278,6 +291,14 @@ header {
         <div id="points-list">
           <div class="empty-state"><div class="empty-icon">📍</div>Кликните на изображение для добавления точек промпта</div>
         </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hdr"><div class="dot green"></div> ROI-замеры</div>
+      <div class="panel-body">
+        <div id="roi-list"></div>
+        <button class="clear-btn" id="roi-clear" style="display:none;" onclick="clearRois()">Очистить ROI-замеры</button>
       </div>
     </div>
 
@@ -441,6 +462,13 @@ function readDicom(buffer) {
   const rescaleSlope = getFloat('0028,1053') ?? 1;
   const wc = getFloat('0028,1050');
   const ww = getFloat('0028,1051');
+  // PixelSpacing (0028,0030): межпиксельный шаг в мм, формат row\col (строка, затем столбец)
+  const psStr = getStr('0028,0030');
+  let pixelSpacing = null;
+  if (psStr) {
+    const ps = psStr.split('\\').map(parseFloat);
+    if (ps.length >= 2 && isFinite(ps[0]) && isFinite(ps[1]) && ps[0] > 0 && ps[1] > 0) pixelSpacing = { row: ps[0], col: ps[1] };
+  }
 
   const pixelTag = tags.get('7fe0,0010');
   if (!pixelTag) throw new Error('В DICOM-файле нет данных изображения (PixelData)');
@@ -461,6 +489,7 @@ function readDicom(buffer) {
   return {
     width, height, pixels, huMin: Math.round(min), huMax: Math.round(max),
     wcDefault: wc ?? 40, wwDefault: ww ?? 400,
+    pixelSpacing,
     meta: {
       patient: getStr('0010,0010'),
       studyDesc: getStr('0008,1030'),
@@ -503,6 +532,7 @@ function showDicomMeta() {
   if (m.modality) bits.push('Модальность: <b>' + m.modality + '</b>');
   if (m.date) bits.push('Дата: <b>' + m.date.replace(/(\\d{4})(\\d{2})(\\d{2})/, '$1-$2-$3') + '</b>');
   if (m.manufacturer) bits.push('Производитель: <b>' + m.manufacturer + '</b>');
+  if (dicomData.pixelSpacing) bits.push(`Воксель: <b>${dicomData.pixelSpacing.col}×${dicomData.pixelSpacing.row} мм</b>`);
   bits.push(`HU: <b>${dicomData.huMin} … ${dicomData.huMax}</b>`);
   document.getElementById('dicom-meta').innerHTML = bits.join('<br>');
 }
@@ -577,6 +607,8 @@ function clampPan() {
 function applyViewTransform() {
   if (!canvasRef) return;
   canvasRef.style.transform = zoomLevel === 1 && !panX && !panY ? '' : `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+  const ov = document.getElementById('canvas-wrap').querySelector('.roi-overlay');
+  if (ov) ov.style.transform = canvasRef.style.transform;
   const badge = document.getElementById('zoom-badge');
   if (zoomLevel !== 1 || panX || panY) {
     document.getElementById('zoom-badge-text').textContent = Math.round(zoomLevel * 100) + '%';
@@ -688,6 +720,18 @@ function initCanvasMouseControls() {
 
   wrap.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
+    if (roiMode) {
+      const p = clientToRoi(e);
+      const sp = roiSpace();
+      if (sp && p && p.x >= 0 && p.y >= 0 && p.x <= sp.w && p.y <= sp.h) {
+        roiDrag = { active: true, x0: p.x, y0: p.y, x1: p.x, y1: p.y, color: ROI_COLORS[rois.length % ROI_COLORS.length] };
+        drag = { roi: true, startX: e.clientX, startY: e.clientY, moved: false };
+        renderRoiList();
+        drawRoiOverlay();
+      }
+      e.preventDefault();
+      return;
+    }
     drag = { startX: e.clientX, startY: e.clientY, baseW: wl.width, baseC: wl.center, moved: false, dicom: !!dicomData };
     e.preventDefault();
   });
@@ -698,6 +742,11 @@ function initCanvasMouseControls() {
     const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < 5) return; // порог: дрожание мыши не отменяет установку точки
     drag.moved = true;
+    if (drag.roi) {
+      const p = clientToRoi(e);
+      if (p && roiDrag) { roiDrag.x1 = p.x; roiDrag.y1 = p.y; drawRoiOverlay(); renderRoiList(); }
+      return;
+    }
     if (!drag.dicom) return; // без DICOM перетаскивание ничего не меняет
     const wFactor = drag.baseW >= 1000 ? 4 : drag.baseW >= 200 ? 2 : 1;
     const cFactor = Math.abs(dy) > 200 ? 3 : 1;
@@ -711,7 +760,9 @@ function initCanvasMouseControls() {
   window.addEventListener('mouseup', e => {
     if (!drag) return;
     const wasClick = !drag.moved;
+    const wasRoi = drag.roi;
     drag = null;
+    if (wasRoi) { commitRoiDraft(wasClick); return; }
     if (wasClick) handleCanvasClick(e); // обычный клик — точка промпта
   });
 
@@ -727,6 +778,206 @@ function initCanvasMouseControls() {
     updateWlLabels();
     scheduleWlRedraw();
   }, { passive: false });
+}
+
+// ===== ROI-ЗАМЕРЫ =====
+// Эллипс, протянутый мышью в режиме ROI: диаметр и площадь в мм (из PixelSpacing DICOM),
+// среднее/min/max HU внутри области. Геометрия хранится в координатах матрицы снимка
+// (не экрана), поэтому замеры не зависят от зума/панорамы и переживают смену вида.
+// Рисуются на отдельном прозрачном оверлее, который наследует transform основного холста.
+let roiMode = false;
+let rois = [];       // нормализованные эллипсы {x0,y0,x1,y1,color,stats}
+let roiDrag = null;  // эллипс в процессе протяжки
+const ROI_COLORS = ['#06b6d4', '#f59e0b', '#ec4899', '#10b981', '#8b5cf6'];
+
+function toggleRoiMode() {
+  if (!roiMode && (!canvasRef || !document.getElementById('canvas-wrap').contains(canvasRef))) {
+    showToast('Сначала загрузите изображение или выберите образец.');
+    return;
+  }
+  roiMode = !roiMode;
+  document.getElementById('roi-btn').classList.toggle('active', roiMode);
+  document.getElementById('canvas-wrap').classList.toggle('roi-active', roiMode);
+  showToast(roiMode
+    ? 'Режим ROI: протяните мышью эллипс — увидите диаметр в мм и среднее HU'
+    : 'Режим ROI выключен: клик ставит точку промпта, перетаскивание — W/L');
+}
+
+function clearRois() { rois = []; drawRoiOverlay(); renderRoiList(); }
+function deleteRoi(i) { rois.splice(i, 1); drawRoiOverlay(); renderRoiList(); }
+
+// Координатная система ROI: матрица DICOM (для неё определён PixelSpacing)
+// или внутренние пиксели холста для обычных изображений/образцов
+function roiSpace() {
+  if (!canvasRef) return null;
+  return dicomData
+    ? { w: dicomData.width, h: dicomData.height, dicom: true }
+    : { w: canvasRef.width, h: canvasRef.height, dicom: false };
+}
+
+function clientToRoi(e) {
+  const sp = roiSpace();
+  if (!sp) return null;
+  const rect = canvasRef.getBoundingClientRect(); // учитывает зум/панораму
+  return { x: (e.clientX - rect.left) / rect.width * sp.w, y: (e.clientY - rect.top) / rect.height * sp.h };
+}
+
+function computeRoiStats(r) {
+  const sp = roiSpace();
+  if (!sp) return null;
+  const xa = Math.min(r.x0, r.x1), xb = Math.max(r.x0, r.x1);
+  const ya = Math.min(r.y0, r.y1), yb = Math.max(r.y0, r.y1);
+  const cx = (xa + xb) / 2, cy = (ya + yb) / 2;
+  const rx = Math.max(0.5, (xb - xa) / 2), ry = Math.max(0.5, (yb - ya) / 2);
+  const x0 = Math.max(0, Math.floor(xa)), x1 = Math.min(sp.w - 1, Math.ceil(xb));
+  const y0 = Math.max(0, Math.floor(ya)), y1 = Math.min(sp.h - 1, Math.ceil(yb));
+  let n = 0, sum = 0, min = Infinity, max = -Infinity;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy > 1) continue;
+      n++;
+      if (sp.dicom) {
+        const v = dicomData.pixels[y * dicomData.width + x];
+        sum += v;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+  }
+  return {
+    wPx: xb - xa, hPx: yb - ya, n,
+    meanHu: sp.dicom && n ? Math.round(sum / n) : null,
+    minHu: sp.dicom && n ? min : null,
+    maxHu: sp.dicom && n ? max : null,
+    spacing: sp.dicom ? dicomData.pixelSpacing : null,
+  };
+}
+
+function roiSizeText(st) {
+  const sp = st.spacing;
+  if (sp) {
+    const wMm = st.wPx * sp.col, hMm = st.hPx * sp.row;
+    const diam = Math.sqrt(wMm * hMm);
+    const area = Math.PI * (wMm / 2) * (hMm / 2);
+    return `Ø <b>${diam.toFixed(1)} мм</b> · ${wMm.toFixed(1)}×${hMm.toFixed(1)} мм · S ${area.toFixed(1)} мм²`;
+  }
+  return `Ø <b>${Math.sqrt(st.wPx * st.hPx).toFixed(0)} пкс</b> · ${Math.round(st.wPx)}×${Math.round(st.hPx)} пкс`;
+}
+
+// Завершение (или отмена) протяжки ROI
+function commitRoiDraft(wasClick) {
+  const draft = roiDrag;
+  roiDrag = null;
+  if (!draft) return;
+  const sp = roiSpace();
+  const w = Math.abs(draft.x1 - draft.x0), h = Math.abs(draft.y1 - draft.y0);
+  if (wasClick || !sp || w < 2 || h < 2) { // клик без протяжки или вырожденный эллипс — отмена
+    drawRoiOverlay(); renderRoiList();
+    return;
+  }
+  const rec = {
+    x0: Math.max(0, Math.min(draft.x0, draft.x1)),
+    x1: Math.min(sp.w, Math.max(draft.x0, draft.x1)),
+    y0: Math.max(0, Math.min(draft.y0, draft.y1)),
+    y1: Math.min(sp.h, Math.max(draft.y0, draft.y1)),
+    color: draft.color,
+  };
+  rec.stats = computeRoiStats(rec);
+  if (!rec.stats || !rec.stats.n) { drawRoiOverlay(); renderRoiList(); return; }
+  rois.push(rec);
+  drawRoiOverlay();
+  renderRoiList();
+  showToast(`ROI ${rois.length}: ${roiSizeText(rec.stats).replace(/<[^>]+>/g, '')}` + (rec.stats.meanHu !== null ? ` · среднее ${rec.stats.meanHu} HU` : ''));
+}
+
+function drawRoiOverlay() {
+  if (!canvasRef) return;
+  const wrap = document.getElementById('canvas-wrap');
+  if (!wrap.contains(canvasRef)) return;
+  let ov = wrap.querySelector('.roi-overlay');
+  if (ov && (ov.width !== canvasRef.width || ov.height !== canvasRef.height)) { ov.remove(); ov = null; }
+  if (!ov) {
+    ov = document.createElement('canvas');
+    ov.className = 'roi-overlay';
+    ov.width = canvasRef.width;
+    ov.height = canvasRef.height;
+    wrap.appendChild(ov);
+  }
+  // Оверлей абсолютно позиционирован по смещению основного холста внутри flex-центрированного wrap
+  ov.style.left = canvasRef.offsetLeft + 'px';
+  ov.style.top = canvasRef.offsetTop + 'px';
+  ov.style.transform = canvasRef.style.transform; // тот же transform — совпадает с снимком при зуме/панораме
+  const ctx = ov.getContext('2d');
+  ctx.clearRect(0, 0, ov.width, ov.height);
+  const sp = roiSpace();
+  if (!sp) return;
+  const kx = ov.width / sp.w, ky = ov.height / sp.h;
+  const lw = Math.max(1.5, 2 * Math.min(kx, ky));
+  const fs = Math.max(9, Math.round(11 * Math.min(kx, ky)));
+  const items = rois.map((r, i) => ({ r, label: `#${i + 1}`, draft: false }));
+  if (roiDrag && roiDrag.active) items.push({ r: roiDrag, label: '', draft: true });
+  for (const it of items) {
+    const rx = Math.abs(it.r.x1 - it.r.x0) / 2 * kx;
+    const ry = Math.abs(it.r.y1 - it.r.y0) / 2 * ky;
+    const cx = (it.r.x0 + it.r.x1) / 2 * kx;
+    const cy = (it.r.y0 + it.r.y1) / 2 * ky;
+    ctx.save();
+    ctx.strokeStyle = it.r.color;
+    ctx.lineWidth = lw;
+    if (it.draft) ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, Math.max(rx, 1), Math.max(ry, 1), 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    if (it.draft) continue;
+    // Подпись над эллипсом: №, эквивалентный диаметр, среднее HU
+    const st = it.r.stats;
+    let label = it.label;
+    if (st) {
+      label += st.spacing
+        ? ` · Ø${Math.sqrt(st.wPx * st.spacing.col * st.hPx * st.spacing.row).toFixed(1)}мм`
+        : ` · Ø${Math.round(Math.sqrt(st.wPx * st.hPx))}пкс`;
+      if (st.meanHu !== null) label += ` · ${st.meanHu}HU`;
+    }
+    const above = cy - ry - 4;
+    const ty = above >= fs ? above : Math.min(ov.height - 4, cy + ry + fs);
+    ctx.font = 'bold ' + fs + 'px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(5,8,16,0.85)';
+    ctx.strokeText(label, cx, ty);
+    ctx.fillStyle = it.r.color;
+    ctx.fillText(label, cx, ty);
+  }
+}
+
+function renderRoiList() {
+  const el = document.getElementById('roi-list');
+  if (!el) return;
+  const clearBtn = document.getElementById('roi-clear');
+  const entries = rois.map((r, i) => ({ r, i, draft: false }));
+  if (roiDrag && roiDrag.active) entries.push({ r: roiDrag, i: rois.length, draft: true });
+  if (!entries.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">📐</div>Включите режим «ROI-замеры» и протяните эллипс по снимку</div>';
+    clearBtn.style.display = 'none';
+    return;
+  }
+  clearBtn.style.display = rois.length ? '' : 'none';
+  el.innerHTML = '<div class="roi-list">' + entries.map(({ r, i, draft }) => {
+    const st = draft ? computeRoiStats(r) : (r.stats || (r.stats = computeRoiStats(r)));
+    if (!st) return '';
+    const huLine = st.meanHu !== null
+      ? `Среднее <b>${st.meanHu} HU</b> · min ${st.minHu} · max ${st.maxHu} · ${st.n} пкс`
+      : `${st.n} пкс`;
+    return `<div class="roi-item">
+      <div class="roi-item-head">
+        <span style="display:flex;align-items:center;gap:6px;"><span class="point-dot" style="background:${r.color}"></span>ROI ${i + 1}${draft ? ' (протяжка…)' : ''}</span>
+        ${draft ? '' : `<button class="roi-del" onclick="deleteRoi(${i})" title="Удалить ROI">✕</button>`}
+      </div>
+      <div class="roi-item-vals">${roiSizeText(st)}<br>${huLine}</div>
+    </div>`;
+  }).join('') + '</div>';
 }
 
 function redrawDicomView() {
@@ -770,6 +1021,7 @@ function loadDicomFile(file) {
   wrap.appendChild(canvas);
   zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
   renderDicomToCanvas(canvas.getContext('2d'));
+  drawRoiOverlay();
     showToast('DICOM загружен: ' + dicomData.width + '×' + dicomData.height + ' · тяните мышью по снимку для окна W/L');
   };
   reader.readAsArrayBuffer(file);
@@ -785,6 +1037,7 @@ function plural(n, one, few, many) {
 buildWlPanel();
 initCanvasMouseControls();
 initCanvasZoomPan();
+renderRoiList();
 
 // Build samples
 const samplesRow = document.getElementById('samples-row');
@@ -819,6 +1072,7 @@ function resetForNewImage() {
   document.getElementById('export-row').style.display = 'none';
   document.getElementById('wl-panel').classList.remove('visible');
   hideHuReadout();
+  rois = []; roiDrag = null; renderRoiList(); drawRoiOverlay();
   zoomLevel = 1; panX = 0; panY = 0; applyViewTransform();
 }
 document.getElementById('file-input').addEventListener('change', e => {
@@ -854,6 +1108,7 @@ function loadRealImage(src) {
     ctx.drawImage(img, 0, 0, w, h);
     canvasRef = canvas;
     wrap.appendChild(canvas);
+    drawRoiOverlay();
   };
   img.src = src;
 }
@@ -867,6 +1122,7 @@ function drawSyntheticImage(sample) {
   generateMedicalImage(ctx, 500, 420, sample);
   canvasRef = canvas;
   wrap.appendChild(canvas);
+  drawRoiOverlay();
 }
 
 function generateMedicalImage(ctx, w, h, sample) {
@@ -946,6 +1202,7 @@ function generateMedicalImage(ctx, w, h, sample) {
 }
 
 function handleCanvasClick(e) {
+  if (roiMode) return; // в режиме ROI клики не ставят точки промпта
   const wrap = document.getElementById('canvas-wrap');
   if (!canvasRef || !wrap.contains(canvasRef)) return;
   const rect = canvasRef.getBoundingClientRect();
@@ -1362,12 +1619,15 @@ function applyReportToCanvas(report) {
   document.getElementById('wl-panel').classList.remove('visible');
   canvasRef = canvas;
   wrap.appendChild(canvas);
+  drawRoiOverlay();
   return { placed: true, exact: false };
 }
 
 function importReport(report) {
   const error = validateReport(report);
   if (error) { showToast('Отчёт не принят: ' + error); return false; }
+
+  rois = []; roiDrag = null; renderRoiList(); // ROI-замеры относятся к прежнему снимку
 
   // Точки промпта
   promptPoints = (report.prompt_points || []).map((p, i) => ({
